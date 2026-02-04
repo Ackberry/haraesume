@@ -1,0 +1,34 @@
+# Dependencies
+/node_modules
+/target
+
+# Build outputs
+/frontend/dist
+/backend/target
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Rust
+**/*.rs.bk
+Cargo.lock
+
+# Temp files
+*.tmp
+*.temp
