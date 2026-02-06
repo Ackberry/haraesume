@@ -2,52 +2,49 @@
 
 A full-stack web application that optimizes LaTeX resumes for specific job descriptions using AI and generates tailored cover letters.
 
-![Rust](https://img.shields.io/badge/Rust-000000?style=flat&logo=rust&logoColor=white)
+![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)
 ![React](https://img.shields.io/badge/React-20232A?style=flat&logo=react&logoColor=61DAFB)
 ![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=flat&logo=typescript&logoColor=white)
 
 ## Features
 
-- 📄 **LaTeX Resume Upload** - Drag-and-drop your `.tex` resume
-- 🎯 **AI-Powered Optimization** - Tailors your resume to match job descriptions
-- ✉️ **Cover Letter Generation** - Creates personalized cover letters
-- 📥 **PDF Export** - Compiles optimized LaTeX to downloadable PDF
-- 🔍 **ATS-Friendly** - Ensures compatibility with Applicant Tracking Systems
+- LaTeX Resume Upload - Drag-and-drop your `.tex` resume
+- AI-Powered Optimization - Tailors your resume to match job descriptions
+- Cover Letter Generation - Creates personalized cover letters
+- PDF Export - Compiles optimized LaTeX to downloadable PDF
+- ATS-Friendly - Keeps formatting compatible with applicant tracking systems
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|------------|
-| Backend | Rust, Axum, Tokio |
+| Backend | Go (net/http) |
 | Frontend | React, TypeScript, Vite, TailwindCSS |
 | LLM | OpenRouter API (Claude) |
 | PDF | TeX Live (pdflatex) |
 
 ## Project Structure
 
-```
+```text
 haraesume/
-├── backend/                 # Rust API server
-│   ├── Cargo.toml
-│   └── src/
-│       ├── main.rs          # Axum routes & server
-│       ├── llm.rs           # OpenRouter integration
-│       └── latex.rs         # PDF compilation
+├── backend/                 # Go API server
+│   ├── go.mod
+│   └── main.go              # Routes, LLM integration, PDF compilation
 ├── frontend/                # React SPA
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/
 │       ├── App.tsx          # 4-step wizard UI
-│       └── index.css        # Dark theme styles
+│       └── index.css        # Theme styles
 └── sample_resume.tex        # Test resume
 ```
 
 ## Prerequisites
 
-- **Rust** (1.70+)
-- **Node.js** (20+)
-- **TeX Live** (for `pdflatex`)
-- **OpenRouter API Key**
+- Go (1.22+)
+- Node.js (20+)
+- TeX Live (for `pdflatex`)
+- OpenRouter API key
 
 ## Quick Start
 
@@ -60,16 +57,16 @@ cd haraesume
 
 ### 2. Start Backend
 
-```powershell
+```bash
 cd backend
-$env:OPENROUTER_API_KEY = "your-openrouter-api-key"
-cargo run --release
+export OPENROUTER_API_KEY="your-openrouter-api-key"
+go run .
 # Server: http://localhost:3001
 ```
 
 ### 3. Start Frontend
 
-```powershell
+```bash
 cd frontend
 npm install
 npm run dev
@@ -100,7 +97,6 @@ npm run dev
 | Variable | Description |
 |----------|-------------|
 | `OPENROUTER_API_KEY` | Your OpenRouter API key |
-| `RUST_LOG` | Log level (default: `info`) |
 
 ## Development
 
@@ -108,24 +104,19 @@ npm run dev
 
 ```bash
 cd backend
-cargo check      # Type check
-cargo test       # Run tests
-cargo run        # Development server
+go test ./...
+go run .
 ```
 
 ### Frontend
 
 ```bash
 cd frontend
-npm run dev      # Dev server with HMR
-npm run build    # Production build
-npm run preview  # Preview production build
+npm run dev
+npm run build
+npm run preview
 ```
 
 ## License
 
 MIT
-
----
-
-Built with ♥ using Rust and React

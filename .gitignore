@@ -1,10 +1,9 @@
 # Dependencies
 /node_modules
-/target
 
 # Build outputs
 /frontend/dist
-/backend/target
+/backend/bin
 
 # Environment
 .env
@@ -25,9 +24,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Rust
-**/*.rs.bk
-Cargo.lock
+# Go
+*.test
+coverage.out
 
 # Temp files
 *.tmp
