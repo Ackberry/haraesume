@@ -1,9 +1,13 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import './index.css'
 
 // Types
 interface ApiError {
   error: string
+}
+
+interface ResumeStatus {
+  has_resume: boolean
 }
 
 type Step = 'upload' | 'job' | 'optimize' | 'result'
@@ -54,6 +58,25 @@ function App() {
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string>('')
   const [dragOver, setDragOver] = useState<boolean>(false)
+  const [hasSavedResume, setHasSavedResume] = useState<boolean>(false)
+
+  useEffect(() => {
+    const checkResumeStatus = async () => {
+      try {
+        const res = await fetch('/api/resume-status')
+        if (!res.ok) return
+        const data: ResumeStatus = await res.json()
+        if (data.has_resume) {
+          setHasSavedResume(true)
+          setStep('job')
+        }
+      } catch {
+        // Keep upload as fallback.
+      }
+    }
+
+    void checkResumeStatus()
+  }, [])
 
   // Handle file upload
   const handleFileSelect = useCallback(async (file: File) => {
@@ -85,6 +108,7 @@ function App() {
         throw new Error(err.error)
       }
 
+      setHasSavedResume(true)
       setStep('job')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Upload failed')
@@ -224,7 +248,7 @@ function App() {
 
   // Reset to start
   const handleReset = () => {
-    setStep('upload')
+    setStep(hasSavedResume ? 'job' : 'upload')
     setResumeFile(null)
     setResumeContent('')
     setJobDescription('')
@@ -338,8 +362,14 @@ function App() {
           <div className="fade-in">
             <h2 className="text-3xl font-bold mb-2">Paste Job Description</h2>
             <p className="text-[var(--text-secondary)] mb-8">
-              Paste the job description to tailor your resume
+              Paste the job description to tailor both your resume and cover letter
             </p>
+
+            {hasSavedResume && (
+              <div className="glass-card p-4 mb-6 text-[var(--text-secondary)]">
+                Using your saved base resume. Upload a new one only if you want to replace it.
+              </div>
+            )}
 
             <textarea
               className="input-field textarea"
@@ -349,9 +379,15 @@ function App() {
             />
 
             <div className="flex gap-4 mt-6">
-              <button className="btn-secondary" onClick={() => setStep('upload')}>
-                ← Back
-              </button>
+              {hasSavedResume ? (
+                <button className="btn-secondary" onClick={() => setStep('upload')}>
+                  Replace Resume
+                </button>
+              ) : (
+                <button className="btn-secondary" onClick={() => setStep('upload')}>
+                  ← Back
+                </button>
+              )}
               <button
                 className="btn-primary flex-1 flex items-center justify-center gap-2"
                 onClick={handleJobSubmit}

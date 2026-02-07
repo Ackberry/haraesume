@@ -26,28 +26,50 @@ const (
 	openRouterBaseURL  = "https://openrouter.ai/api/v1/chat/completions"
 	openRouterModel    = "anthropic/claude-sonnet-4"
 	maxMultipartMemory = 16 << 20
+	defaultResumePath  = "state/base_resume.tex"
 )
 
 type appState struct {
 	mu                    sync.RWMutex
-	currentResume         *string
+	baseResume            *string
+	currentOptimized      *string
 	currentJobDescription *string
 }
 
-func (s *appState) setResume(value string) {
+func (s *appState) setBaseResume(value string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := value
-	s.currentResume = &v
+	s.baseResume = &v
+	s.currentOptimized = nil
 }
 
-func (s *appState) getResume() (string, bool) {
+func (s *appState) setOptimizedResume(value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := value
+	s.currentOptimized = &v
+}
+
+func (s *appState) getBaseResume() (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.currentResume == nil {
+	if s.baseResume == nil {
 		return "", false
 	}
-	return *s.currentResume, true
+	return *s.baseResume, true
+}
+
+func (s *appState) getActiveResume() (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.currentOptimized != nil {
+		return *s.currentOptimized, true
+	}
+	if s.baseResume != nil {
+		return *s.baseResume, true
+	}
+	return "", false
 }
 
 func (s *appState) setJobDescription(value string) {
@@ -55,6 +77,7 @@ func (s *appState) setJobDescription(value string) {
 	defer s.mu.Unlock()
 	v := value
 	s.currentJobDescription = &v
+	s.currentOptimized = nil
 }
 
 func (s *appState) getJobDescription() (string, bool) {
@@ -67,7 +90,8 @@ func (s *appState) getJobDescription() (string, bool) {
 }
 
 type server struct {
-	state *appState
+	state           *appState
+	resumeStorePath string
 }
 
 type errorResponse struct {
@@ -97,15 +121,30 @@ type healthResponse struct {
 	Version string `json:"version"`
 }
 
+type resumeStatusResponse struct {
+	HasResume bool `json:"has_resume"`
+	Length    int  `json:"length"`
+}
+
 func main() {
 	loadEnvironment()
 
+	resumeStorePath := strings.TrimSpace(os.Getenv("RESUME_STORE_PATH"))
+	if resumeStorePath == "" {
+		resumeStorePath = defaultResumePath
+	}
+
 	s := &server{
-		state: &appState{},
+		state:           &appState{},
+		resumeStorePath: resumeStorePath,
+	}
+	if err := s.loadPersistedBaseResume(); err != nil {
+		log.Printf("Unable to load persisted resume: %v", err)
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.healthCheck)
+	mux.HandleFunc("/api/resume-status", s.resumeStatus)
 	mux.HandleFunc("/api/upload-resume", s.uploadResume)
 	mux.HandleFunc("/api/job-description", s.setJobDescription)
 	mux.HandleFunc("/api/optimize", s.optimizeResume)
@@ -174,6 +213,34 @@ func loadEnvFile(path string) error {
 	return scanner.Err()
 }
 
+func (s *server) loadPersistedBaseResume() error {
+	data, err := os.ReadFile(s.resumeStorePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !utf8.Valid(data) {
+		return errors.New("persisted resume is not valid UTF-8")
+	}
+	content := strings.TrimSpace(strings.TrimPrefix(string(data), "\ufeff"))
+	if content == "" {
+		return nil
+	}
+	s.state.setBaseResume(content)
+	log.Printf("Loaded persisted base resume (%d chars)", len(content))
+	return nil
+}
+
+func (s *server) persistBaseResume(content string) error {
+	dir := filepath.Dir(s.resumeStorePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(s.resumeStorePath, []byte(content), 0o600)
+}
+
 func (s *server) healthCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -182,6 +249,27 @@ func (s *server) healthCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, healthResponse{
 		Status:  "healthy",
 		Version: appVersion,
+	})
+}
+
+func (s *server) resumeStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	resume, ok := s.state.getBaseResume()
+	if !ok {
+		writeJSON(w, http.StatusOK, resumeStatusResponse{
+			HasResume: false,
+			Length:    0,
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resumeStatusResponse{
+		HasResume: true,
+		Length:    len(resume),
 	})
 }
 
@@ -220,11 +308,15 @@ func (s *server) uploadResume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content := string(data)
-	s.state.setResume(content)
+	s.state.setBaseResume(content)
+	if err := s.persistBaseResume(content); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to persist resume: %v", err))
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
-		"message": "Resume uploaded successfully",
+		"message": "Resume uploaded and saved successfully",
 		"length":  len(content),
 	})
 }
@@ -254,9 +346,9 @@ func (s *server) optimizeResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resume, ok := s.state.getResume()
+	resume, ok := s.state.getBaseResume()
 	if !ok {
-		writeError(w, http.StatusBadRequest, "No resume uploaded. Please upload a resume first.")
+		writeError(w, http.StatusBadRequest, "No base resume found. Please upload a resume first.")
 		return
 	}
 
@@ -272,7 +364,7 @@ func (s *server) optimizeResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.state.setResume(optimizedLatex)
+	s.state.setOptimizedResume(optimizedLatex)
 	writeJSON(w, http.StatusOK, optimizeResponse{
 		OptimizedLatex: optimizedLatex,
 		ChangesSummary: changesSummary,
@@ -285,9 +377,9 @@ func (s *server) generateCoverLetter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resume, ok := s.state.getResume()
+	resume, ok := s.state.getBaseResume()
 	if !ok {
-		writeError(w, http.StatusBadRequest, "No resume uploaded")
+		writeError(w, http.StatusBadRequest, "No base resume found")
 		return
 	}
 
@@ -314,7 +406,7 @@ func (s *server) generatePDF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resume, ok := s.state.getResume()
+	resume, ok := s.state.getActiveResume()
 	if !ok {
 		writeError(w, http.StatusBadRequest, "No resume to convert")
 		return
@@ -380,25 +472,43 @@ type chatResponse struct {
 }
 
 func optimizeResumeWithLLM(resumeLatex, jobDescription string) (string, string, error) {
-	systemPrompt := `You are an expert resume optimizer. Your task is to modify a LaTeX resume to better match a job description while:
-1. Keeping all LaTeX syntax valid and compilable
-2. Preserving the original structure and formatting
-3. Tailoring bullet points to highlight relevant experience
-4. Adding relevant keywords from the job description naturally
-5. Quantifying achievements where possible
-6. Ensuring ATS compatibility (no tables, simple formatting)
+	const maxSkillAdds = 5
+	targetedSkills := suggestMissingTechnicalSkills(resumeLatex, jobDescription, maxSkillAdds)
 
-IMPORTANT: Return ONLY valid LaTeX code. Do not include markdown code fences or explanations in the LaTeX output.`
+	systemPrompt := `You are an expert resume optimizer. Your primary goal is to improve matching while preserving core resume content.
 
-	userPrompt := fmt.Sprintf(`Please optimize this resume for the following job:
+Hard constraints:
+1. Keep all LaTeX syntax valid and compilable.
+2. Preserve document structure and formatting commands.
+3. Keep the content in Experience, Projects, and Leadership essentially unchanged (same roles, bullets, and claims).
+4. Focus edits on the Technical Skills section by adding only a small set of high-value, job-relevant skills.
+5. Do not flood the Technical Skills section with every keyword from the job description.
+6. Never invent accomplishments, dates, companies, metrics, or responsibilities.
 
-## Job Description:
+Technical Skills policy:
+- Add at most 5 missing skills/tools/frameworks total.
+- Prefer skills that are explicit priorities in the job description.
+- Keep the original category structure (Languages/Frameworks/Tools/Concepts).
+- Preserve existing skills and just append concise additions where appropriate.
+
+Output format:
+- First output ONLY the full LaTeX document.
+- Then output a separator line exactly: ---CHANGES---
+- Then list brief bullet points describing what changed.`
+
+	userPrompt := fmt.Sprintf(`Optimize this resume for the job description using the constraints above.
+
+Job Description:
 %s
 
-## Current Resume (LaTeX):
+Recommended missing technical skills to consider (choose only the most important subset, up to 5 total):
 %s
 
-Return the optimized LaTeX resume. After the LaTeX, add a separator "---CHANGES---" and briefly list the key changes you made.`, jobDescription, resumeLatex)
+Critical section lock:
+- Keep Experience, Projects, and Leadership content unchanged apart from tiny wording fixes.
+
+Current Resume (LaTeX):
+%s`, jobDescription, formatSkillSuggestions(targetedSkills), resumeLatex)
 
 	content, err := runLLM(systemPrompt, userPrompt, 4096)
 	if err != nil {
@@ -410,6 +520,12 @@ Return the optimized LaTeX resume. After the LaTeX, add a separator "---CHANGES-
 		return "", "", err
 	}
 
+	optimizedLatex = restoreLockedSections(resumeLatex, optimizedLatex, []string{
+		"experience",
+		"projects",
+		"leadership",
+	})
+
 	return optimizedLatex, changesSummary, nil
 }
 
@@ -417,9 +533,259 @@ var (
 	latexFenceRegex   = regexp.MustCompile("(?is)```(?:latex)?\\s*(.*?)```")
 	latexCommentRegex = regexp.MustCompile(`(?m)%.*$`)
 	latexCommandRegex = regexp.MustCompile(`\\[A-Za-z]+[*]?`)
+	sectionHeaderRE   = regexp.MustCompile(`(?m)^\s*\\section\{([^}]+)\}`)
 	spaceRegex        = regexp.MustCompile(`[ \t]+`)
 	numberRegex       = regexp.MustCompile(`\b\d+(?:[.,]\d+)?(?:%|x|k|m|ms)?\b`)
 )
+
+type skillCandidate struct {
+	Name     string
+	Category string
+	Keywords []string
+	Priority int
+}
+
+type skillSuggestion struct {
+	Name     string
+	Category string
+	Score    int
+}
+
+var curatedSkillCandidates = []skillCandidate{
+	{Name: "PostgreSQL", Category: "Tools", Keywords: []string{"postgresql", "postgres"}, Priority: 6},
+	{Name: "MySQL", Category: "Tools", Keywords: []string{"mysql"}, Priority: 4},
+	{Name: "Redis", Category: "Tools", Keywords: []string{"redis"}, Priority: 5},
+	{Name: "Kubernetes", Category: "Tools", Keywords: []string{"kubernetes", "k8s"}, Priority: 6},
+	{Name: "Terraform", Category: "Tools", Keywords: []string{"terraform"}, Priority: 5},
+	{Name: "Linux", Category: "Tools", Keywords: []string{"linux"}, Priority: 4},
+	{Name: "REST APIs", Category: "Concepts", Keywords: []string{"rest api", "restful"}, Priority: 5},
+	{Name: "GraphQL", Category: "Concepts", Keywords: []string{"graphql"}, Priority: 4},
+	{Name: "CI/CD", Category: "Concepts", Keywords: []string{"ci/cd", "continuous integration", "continuous delivery"}, Priority: 4},
+	{Name: "FastAPI", Category: "Frameworks", Keywords: []string{"fastapi"}, Priority: 6},
+	{Name: "Django", Category: "Frameworks", Keywords: []string{"django"}, Priority: 5},
+	{Name: "Spring Boot", Category: "Frameworks", Keywords: []string{"spring boot"}, Priority: 5},
+	{Name: "PyTorch", Category: "Frameworks", Keywords: []string{"pytorch"}, Priority: 5},
+	{Name: "TensorFlow", Category: "Frameworks", Keywords: []string{"tensorflow"}, Priority: 5},
+	{Name: "NumPy", Category: "Tools", Keywords: []string{"numpy"}, Priority: 4},
+	{Name: "Pandas", Category: "Tools", Keywords: []string{"pandas"}, Priority: 4},
+	{Name: "scikit-learn", Category: "Frameworks", Keywords: []string{"scikit-learn", "sklearn"}, Priority: 4},
+	{Name: "Apache Kafka", Category: "Tools", Keywords: []string{"kafka", "apache kafka"}, Priority: 5},
+	{Name: "RabbitMQ", Category: "Tools", Keywords: []string{"rabbitmq"}, Priority: 4},
+	{Name: "Microservices", Category: "Concepts", Keywords: []string{"microservices", "microservice"}, Priority: 5},
+	{Name: "Testing", Category: "Concepts", Keywords: []string{"unit testing", "integration testing", "testing"}, Priority: 3},
+	{Name: "GitHub Actions", Category: "Tools", Keywords: []string{"github actions"}, Priority: 3},
+	{Name: "GitLab CI", Category: "Tools", Keywords: []string{"gitlab ci"}, Priority: 3},
+	{Name: "Azure", Category: "Tools", Keywords: []string{"azure"}, Priority: 4},
+}
+
+func suggestMissingTechnicalSkills(resumeLatex, jobDescription string, maxItems int) []skillSuggestion {
+	if maxItems <= 0 {
+		return nil
+	}
+	jobLower := strings.ToLower(jobDescription)
+	techSection := strings.ToLower(getSectionContent(resumeLatex, "technical skills"))
+	if techSection == "" {
+		techSection = strings.ToLower(resumeLatex)
+	}
+
+	candidates := make([]skillSuggestion, 0, len(curatedSkillCandidates))
+	for _, candidate := range curatedSkillCandidates {
+		if resumeAlreadyHasSkill(techSection, candidate) {
+			continue
+		}
+		matchCount := countSkillMentions(jobLower, candidate.Keywords)
+		if matchCount == 0 {
+			continue
+		}
+		score := candidate.Priority + (matchCount * 3) + emphasisBoost(jobLower, candidate.Keywords)
+		candidates = append(candidates, skillSuggestion{
+			Name:     candidate.Name,
+			Category: candidate.Category,
+			Score:    score,
+		})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Score == candidates[j].Score {
+			return candidates[i].Name < candidates[j].Name
+		}
+		return candidates[i].Score > candidates[j].Score
+	})
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	categoryCap := map[string]int{
+		"Languages":  2,
+		"Frameworks": 2,
+		"Tools":      2,
+		"Concepts":   1,
+	}
+	usedByCategory := map[string]int{}
+	out := make([]skillSuggestion, 0, minInt(maxItems, len(candidates)))
+	for _, suggestion := range candidates {
+		if len(out) >= maxItems {
+			break
+		}
+		if usedByCategory[suggestion.Category] >= categoryCap[suggestion.Category] {
+			continue
+		}
+		out = append(out, suggestion)
+		usedByCategory[suggestion.Category]++
+	}
+
+	return out
+}
+
+func formatSkillSuggestions(suggestions []skillSuggestion) string {
+	if len(suggestions) == 0 {
+		return "- No strong missing skills detected from the curated list; keep Technical Skills mostly unchanged."
+	}
+
+	var builder strings.Builder
+	for _, item := range suggestions {
+		builder.WriteString("- ")
+		builder.WriteString(item.Name)
+		builder.WriteString(" (")
+		builder.WriteString(item.Category)
+		builder.WriteString(")\n")
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func countSkillMentions(text string, keywords []string) int {
+	count := 0
+	for _, keyword := range keywords {
+		normalized := strings.TrimSpace(strings.ToLower(keyword))
+		if normalized == "" {
+			continue
+		}
+		count += strings.Count(text, normalized)
+	}
+	return count
+}
+
+func emphasisBoost(jobLower string, keywords []string) int {
+	lines := splitInformativeLines(jobLower)
+	boost := 0
+	for _, line := range lines {
+		if !containsAny(line, []string{"required", "must", "minimum", "preferred", "qualification", "responsibilit"}) {
+			continue
+		}
+		for _, keyword := range keywords {
+			if strings.Contains(line, strings.ToLower(keyword)) {
+				boost += 2
+				break
+			}
+		}
+	}
+	if boost > 6 {
+		return 6
+	}
+	return boost
+}
+
+func resumeAlreadyHasSkill(technicalSectionLower string, candidate skillCandidate) bool {
+	for _, keyword := range candidate.Keywords {
+		if strings.Contains(technicalSectionLower, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
+}
+
+type latexSection struct {
+	Title   string
+	Start   int
+	End     int
+	Content string
+}
+
+func parseLatexSections(latex string) []latexSection {
+	matches := sectionHeaderRE.FindAllStringSubmatchIndex(latex, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	sections := make([]latexSection, 0, len(matches))
+	for i, match := range matches {
+		if len(match) < 4 {
+			continue
+		}
+		start := match[0]
+		end := len(latex)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		title := strings.TrimSpace(latex[match[2]:match[3]])
+		sections = append(sections, latexSection{
+			Title:   title,
+			Start:   start,
+			End:     end,
+			Content: latex[start:end],
+		})
+	}
+	return sections
+}
+
+func getSectionContent(latex string, sectionName string) string {
+	target := normalizeSectionName(sectionName)
+	for _, section := range parseLatexSections(latex) {
+		if normalizeSectionName(section.Title) == target {
+			return section.Content
+		}
+	}
+	return ""
+}
+
+func restoreLockedSections(originalLatex, optimizedLatex string, lockedSections []string) string {
+	originalSections := parseLatexSections(originalLatex)
+	optimizedSections := parseLatexSections(optimizedLatex)
+	if len(originalSections) == 0 || len(optimizedSections) == 0 {
+		return optimizedLatex
+	}
+
+	locked := map[string]struct{}{}
+	for _, name := range lockedSections {
+		locked[normalizeSectionName(name)] = struct{}{}
+	}
+
+	originalByName := map[string]string{}
+	for _, section := range originalSections {
+		originalByName[normalizeSectionName(section.Title)] = section.Content
+	}
+
+	var builder strings.Builder
+	prev := 0
+	for _, section := range optimizedSections {
+		builder.WriteString(optimizedLatex[prev:section.Start])
+		sectionKey := normalizeSectionName(section.Title)
+		if _, shouldLock := locked[sectionKey]; shouldLock {
+			if originalContent, ok := originalByName[sectionKey]; ok {
+				builder.WriteString(originalContent)
+			} else {
+				builder.WriteString(section.Content)
+			}
+		} else {
+			builder.WriteString(section.Content)
+		}
+		prev = section.End
+	}
+	builder.WriteString(optimizedLatex[prev:])
+	return builder.String()
+}
+
+func normalizeSectionName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 func parseOptimizationOutput(content string) (string, string, error) {
 	raw := strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))

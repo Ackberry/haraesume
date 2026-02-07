@@ -10,9 +10,11 @@ A full-stack web application that optimizes LaTeX resumes for specific job descr
 
 - LaTeX Resume Upload - Drag-and-drop your `.tex` resume
 - AI-Powered Optimization - Tailors your resume to match job descriptions
+- Smart Skill Targeting - Prioritizes a small set of missing high-value technical skills
 - Cover Letter Generation - Creates personalized cover letters
 - PDF Export - Compiles optimized LaTeX to downloadable PDF
 - ATS-Friendly - Keeps formatting compatible with applicant tracking systems
+- Persistent Base Resume - Upload once, then reuse the same baseline resume for future job descriptions
 
 ## Tech Stack
 
@@ -81,11 +83,14 @@ npm run dev
 4. Click **Optimize Resume**
 5. Download PDF or generate a cover letter
 
+After the first upload, the backend persists your base resume. On later sessions, you can go straight to the job description step.
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
+| `/api/resume-status` | GET | Whether a persisted base resume is available |
 | `/api/upload-resume` | POST | Upload LaTeX file (multipart) |
 | `/api/job-description` | POST | Set job description |
 | `/api/optimize` | POST | Optimize resume with AI |
@@ -98,6 +103,7 @@ npm run dev
 |----------|-------------|
 | `OPENROUTER_API_KEY` | Your OpenRouter API key |
 | `OPENROUTER_MODEL` | Optional model override for backend/agents |
+| `RESUME_STORE_PATH` | Optional path for persisted base resume (default: `state/base_resume.tex`) |
 | `VITE_*` | Frontend variables (must use `VITE_` prefix) |
 
 You can keep a single root `.env` at `haraesume/.env`.
