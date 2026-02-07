@@ -7,6 +7,7 @@ interface ApiError {
 }
 
 type Step = 'upload' | 'job' | 'optimize' | 'result'
+const isTexFile = (file: File): boolean => file.name.toLowerCase().endsWith('.tex')
 
 // Icons as simple SVG components
 const UploadIcon = () => (
@@ -56,6 +57,11 @@ function App() {
 
   // Handle file upload
   const handleFileSelect = useCallback(async (file: File) => {
+    if (!isTexFile(file)) {
+      setError('Please upload a .tex file only')
+      return
+    }
+
     setResumeFile(file)
     setError('')
 
@@ -91,7 +97,7 @@ function App() {
     e.preventDefault()
     setDragOver(false)
     const file = e.dataTransfer.files[0]
-    if (file && (file.name.endsWith('.tex') || file.type === 'application/x-tex')) {
+    if (file && isTexFile(file)) {
       handleFileSelect(file)
     } else {
       setError('Please upload a .tex file')

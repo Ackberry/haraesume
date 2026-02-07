@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -95,6 +98,8 @@ type healthResponse struct {
 }
 
 func main() {
+	loadEnvironment()
+
 	s := &server{
 		state: &appState{},
 	}
@@ -112,6 +117,61 @@ func main() {
 	if err := http.ListenAndServe(serverAddr, handler); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func loadEnvironment() {
+	candidates := []string{".env", filepath.Join("..", ".env")}
+	for _, path := range candidates {
+		if err := loadEnvFile(path); err == nil {
+			log.Printf("Loaded environment from %s", path)
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			log.Printf("Skipping %s: %v", path, err)
+		}
+	}
+}
+
+func loadEnvFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "export ") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" {
+			continue
+		}
+		if len(value) >= 2 {
+			isQuoted := (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')
+			if isQuoted {
+				value = value[1 : len(value)-1]
+			}
+		}
+
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+
+	return scanner.Err()
 }
 
 func (s *server) healthCheck(w http.ResponseWriter, r *http.Request) {
@@ -136,12 +196,17 @@ func (s *server) uploadResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, _, err := r.FormFile("resume")
+	file, fileHeader, err := r.FormFile("resume")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "No resume file found in request")
 		return
 	}
 	defer file.Close()
+
+	if !strings.EqualFold(filepath.Ext(fileHeader.Filename), ".tex") {
+		writeError(w, http.StatusBadRequest, "Only .tex resume files are supported for upload")
+		return
+	}
 
 	data, err := io.ReadAll(file)
 	if err != nil {
@@ -300,9 +365,10 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
-	Model     string        `json:"model"`
-	Messages  []chatMessage `json:"messages"`
-	MaxTokens int           `json:"max_tokens"`
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	MaxTokens   int           `json:"max_tokens"`
+	Temperature *float64      `json:"temperature,omitempty"`
 }
 
 type chatResponse struct {
@@ -339,44 +405,194 @@ Return the optimized LaTeX resume. After the LaTeX, add a separator "---CHANGES-
 		return "", "", err
 	}
 
-	parts := strings.SplitN(content, "---CHANGES---", 2)
-	optimizedLatex := strings.TrimSpace(parts[0])
-	changesSummary := ""
-	if len(parts) > 1 {
-		changesSummary = strings.TrimSpace(parts[1])
+	optimizedLatex, changesSummary, err := parseOptimizationOutput(content)
+	if err != nil {
+		return "", "", err
 	}
 
 	return optimizedLatex, changesSummary, nil
 }
 
+var (
+	latexFenceRegex   = regexp.MustCompile("(?is)```(?:latex)?\\s*(.*?)```")
+	latexCommentRegex = regexp.MustCompile(`(?m)%.*$`)
+	latexCommandRegex = regexp.MustCompile(`\\[A-Za-z]+[*]?`)
+	spaceRegex        = regexp.MustCompile(`[ \t]+`)
+	numberRegex       = regexp.MustCompile(`\b\d+(?:[.,]\d+)?(?:%|x|k|m|ms)?\b`)
+)
+
+func parseOptimizationOutput(content string) (string, string, error) {
+	raw := strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))
+	if raw == "" {
+		return "", "", errors.New("model returned empty optimization output")
+	}
+
+	parts := strings.SplitN(raw, "---CHANGES---", 2)
+	latexSegment := strings.TrimSpace(parts[0])
+	changesSummary := ""
+	if len(parts) > 1 {
+		changesSummary = strings.TrimSpace(parts[1])
+	}
+
+	optimizedLatex := extractLatexDocument(latexSegment)
+	if optimizedLatex == "" {
+		optimizedLatex = extractLatexDocument(raw)
+	}
+	if optimizedLatex == "" {
+		return "", "", errors.New("model output did not contain a complete LaTeX document")
+	}
+
+	if changesSummary == "" {
+		remaining := strings.TrimSpace(strings.Replace(raw, optimizedLatex, "", 1))
+		remaining = strings.Trim(remaining, "` \n\r\t")
+		if remaining != "" && !strings.EqualFold(remaining, "---changes---") {
+			changesSummary = remaining
+		}
+	}
+
+	return optimizedLatex, changesSummary, nil
+}
+
+func extractLatexDocument(content string) string {
+	cleaned := strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))
+	if cleaned == "" {
+		return ""
+	}
+
+	fencedMatches := latexFenceRegex.FindAllStringSubmatch(cleaned, -1)
+	for _, match := range fencedMatches {
+		if len(match) < 2 {
+			continue
+		}
+		if doc := trimToLatexDocument(match[1]); doc != "" {
+			return doc
+		}
+	}
+
+	return trimToLatexDocument(cleaned)
+}
+
+func trimToLatexDocument(content string) string {
+	start := strings.Index(content, "\\documentclass")
+	end := strings.LastIndex(content, "\\end{document}")
+	if start < 0 || end < 0 || end <= start {
+		return ""
+	}
+	end += len("\\end{document}")
+	return strings.TrimSpace(content[start:end])
+}
+
 func generateCoverLetterWithLLM(resumeLatex, jobDescription string) (string, error) {
-	systemPrompt := `You are an expert cover letter writer. Create a compelling, personalized cover letter that:
-1. Highlights relevant experience from the resume
-2. Shows genuine interest in the specific role and company
-3. Connects the candidate's skills to job requirements
-4. Uses a professional but engaging tone
-5. Is concise (3-4 paragraphs, under 400 words)
-6. Avoids generic phrases and cliches
+	resumePlain := latexToPlainText(resumeLatex)
+	resumeHighlights := pickResumeHighlights(resumePlain, 8)
+	jobHighlights := pickJobHighlights(jobDescription, 8)
 
-Return only the cover letter text, ready to be used.`
+	if len(resumeHighlights) == 0 {
+		resumeHighlights = []string{"No clear resume bullet highlights were extracted; use only verified input details."}
+	}
+	if len(jobHighlights) == 0 {
+		jobHighlights = []string{"Prioritize the role's strongest requirement and align to relevant candidate evidence."}
+	}
 
-	userPrompt := fmt.Sprintf(`Write a cover letter for this job application:
+	systemPrompt := `You are an expert cover letter writer and editor.
 
-## Job Description:
+Write in a natural human voice, not a template. Use these constraints:
+- Be concrete and specific; avoid vague claims.
+- Vary sentence rhythm and sentence openings. Mix short and longer sentences naturally.
+- Keep first-person voice credible and professional.
+- Align directly to this exact role and company details found in the job description.
+- Use measured confidence and avoid hype.
+- Never invent facts not present in the provided inputs.
+
+Hard requirements:
+1. 3-4 paragraphs, 220-380 words total.
+2. Include at least two concrete examples from the resume highlights (metrics, outcomes, tools, or scope when available).
+3. Address at least two job priorities from the job description.
+4. Avoid cliches and stock phrases, including:
+   "I am excited to apply", "I believe I am a great fit", "passionate about", "team player", "fast-paced environment", "think outside the box".
+5. Avoid repetitive sentence starts (for example, do not begin most sentences with "I").
+
+Return only the final cover letter text.`
+
+	userPrompt := fmt.Sprintf(`Write a tailored cover letter using only the factual context below.
+
+Job description:
 %s
 
-## Candidate's Resume (LaTeX, extract relevant info):
-%s`, jobDescription, resumeLatex)
+Top job priorities:
+%s
 
-	content, err := runLLM(systemPrompt, userPrompt, 1024)
+Resume highlights:
+%s
+
+Resume plaintext context (for fact-checking):
+%s`,
+		truncateForPrompt(jobDescription, 5000),
+		formatBullets(jobHighlights),
+		formatBullets(resumeHighlights),
+		truncateForPrompt(resumePlain, 6000),
+	)
+
+	draftTemp := 0.72
+	draft, err := runLLMWithTemperature(systemPrompt, userPrompt, 1200, &draftTemp)
 	if err != nil {
 		return "", err
 	}
 
-	return strings.TrimSpace(content), nil
+	refineSystemPrompt := `You are a senior writing editor improving human-likeness and persuasiveness in cover letters.
+
+Evaluate and revise the draft using this rubric:
+1. Specificity and concreteness
+2. Alignment to job requirements
+3. Sentence rhythm and variety
+4. Authentic professional voice
+5. Cliche avoidance
+
+If any area is weak, rewrite to fix it while preserving factual accuracy.
+
+Keep the final letter:
+- 3-4 paragraphs
+- under 380 words
+- professional, human, and specific
+- free of markdown, headings, or lists
+
+Return only the revised cover letter text.`
+
+	refinePrompt := fmt.Sprintf(`Job description:
+%s
+
+Top job priorities:
+%s
+
+Resume highlights:
+%s
+
+Draft to improve:
+%s`,
+		truncateForPrompt(jobDescription, 5000),
+		formatBullets(jobHighlights),
+		formatBullets(resumeHighlights),
+		truncateForPrompt(draft, 5000),
+	)
+
+	refineTemp := 0.45
+	refined, err := runLLMWithTemperature(refineSystemPrompt, refinePrompt, 1200, &refineTemp)
+	if err != nil {
+		return cleanCoverLetterOutput(draft), nil
+	}
+
+	final := cleanCoverLetterOutput(refined)
+	if final == "" {
+		final = cleanCoverLetterOutput(draft)
+	}
+	return final, nil
 }
 
 func runLLM(systemPrompt, userPrompt string, maxTokens int) (string, error) {
+	return runLLMWithTemperature(systemPrompt, userPrompt, maxTokens, nil)
+}
+
+func runLLMWithTemperature(systemPrompt, userPrompt string, maxTokens int, temperature *float64) (string, error) {
 	apiKey := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
 	if apiKey == "" {
 		return "", errors.New("missing API key: set OPENROUTER_API_KEY environment variable")
@@ -388,7 +604,8 @@ func runLLM(systemPrompt, userPrompt string, maxTokens int) (string, error) {
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		MaxTokens: maxTokens,
+		MaxTokens:   maxTokens,
+		Temperature: temperature,
 	}
 
 	bodyBytes, err := json.Marshal(requestBody)
@@ -462,12 +679,198 @@ func parseMessageContent(content any) (string, error) {
 	}
 }
 
+func latexToPlainText(latex string) string {
+	cleaned := latexCommentRegex.ReplaceAllString(latex, "")
+	cleaned = strings.NewReplacer(
+		`\\`, "\n",
+		`~`, " ",
+		`_`, " ",
+		`^`, " ",
+		`$`, " ",
+		`{`, " ",
+		`}`, " ",
+		`&`, " and ",
+	).Replace(cleaned)
+	cleaned = latexCommandRegex.ReplaceAllString(cleaned, " ")
+
+	lines := strings.Split(cleaned, "\n")
+	output := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(spaceRegex.ReplaceAllString(line, " "))
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(line), "documentclass") {
+			continue
+		}
+		output = append(output, line)
+	}
+	return strings.Join(output, "\n")
+}
+
+func pickResumeHighlights(resumeText string, maxItems int) []string {
+	lines := splitInformativeLines(resumeText)
+	scored := scoreLines(lines, []string{
+		"built", "developed", "designed", "led", "improved", "reduced", "increased",
+		"launched", "shipped", "optimized", "automated", "implemented",
+	}, []string{
+		"python", "go", "java", "javascript", "typescript", "react", "node", "sql",
+		"aws", "gcp", "azure", "docker", "kubernetes", "llm", "langchain", "langgraph",
+	})
+	return topScoredLines(scored, maxItems)
+}
+
+func pickJobHighlights(jobDescription string, maxItems int) []string {
+	lines := splitInformativeLines(jobDescription)
+	scored := scoreLines(lines, []string{
+		"required", "must", "minimum", "preferred", "responsible", "responsibilities",
+		"qualifications", "experience", "skills", "ability", "expect",
+	}, []string{
+		"python", "go", "java", "javascript", "typescript", "react", "node", "sql",
+		"aws", "gcp", "azure", "docker", "kubernetes", "llm", "langchain", "langgraph",
+	})
+	return topScoredLines(scored, maxItems)
+}
+
+type scoredLine struct {
+	text  string
+	score int
+}
+
+func splitInformativeLines(text string) []string {
+	rawLines := strings.Split(text, "\n")
+	lines := make([]string, 0, len(rawLines))
+	for _, raw := range rawLines {
+		line := strings.TrimSpace(strings.TrimLeft(raw, "-*• \t"))
+		line = strings.TrimSpace(spaceRegex.ReplaceAllString(line, " "))
+		if len(line) < 20 {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func scoreLines(lines []string, priorityTerms []string, skillTerms []string) []scoredLine {
+	seen := map[string]struct{}{}
+	scored := make([]scoredLine, 0, len(lines))
+	for _, line := range lines {
+		normalized := strings.ToLower(line)
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+
+		score := 1
+		if numberRegex.MatchString(normalized) {
+			score += 3
+		}
+		if containsAny(normalized, priorityTerms) {
+			score += 2
+		}
+		if containsAny(normalized, skillTerms) {
+			score++
+		}
+		if len(strings.Fields(normalized)) >= 18 {
+			score++
+		}
+		scored = append(scored, scoredLine{text: line, score: score})
+	}
+	return scored
+}
+
+func topScoredLines(lines []scoredLine, maxItems int) []string {
+	sort.SliceStable(lines, func(i, j int) bool {
+		if lines[i].score == lines[j].score {
+			return len(lines[i].text) > len(lines[j].text)
+		}
+		return lines[i].score > lines[j].score
+	})
+
+	if maxItems <= 0 || len(lines) == 0 {
+		return nil
+	}
+	if len(lines) > maxItems {
+		lines = lines[:maxItems]
+	}
+
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, line.text)
+	}
+	return out
+}
+
+func containsAny(text string, terms []string) bool {
+	for _, term := range terms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func formatBullets(items []string) string {
+	if len(items) == 0 {
+		return "- (none)"
+	}
+	var builder strings.Builder
+	for _, item := range items {
+		builder.WriteString("- ")
+		builder.WriteString(strings.TrimSpace(item))
+		builder.WriteString("\n")
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func truncateForPrompt(text string, maxRunes int) string {
+	trimmed := strings.TrimSpace(text)
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return trimmed
+	}
+	return strings.TrimSpace(string(runes[:maxRunes])) + "\n...[truncated]"
+}
+
+func cleanCoverLetterOutput(text string) string {
+	cleaned := strings.TrimSpace(text)
+	if strings.HasPrefix(cleaned, "```") {
+		lines := strings.Split(cleaned, "\n")
+		if len(lines) >= 3 {
+			lines = lines[1:]
+			if strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "```") {
+				lines = lines[:len(lines)-1]
+			}
+			cleaned = strings.TrimSpace(strings.Join(lines, "\n"))
+		}
+	}
+
+	for _, prefix := range []string{"cover letter:", "final cover letter:"} {
+		lower := strings.ToLower(cleaned)
+		if strings.HasPrefix(lower, prefix) {
+			cleaned = strings.TrimSpace(cleaned[len(prefix):])
+		}
+	}
+	return cleaned
+}
+
 func compileToPDF(latexSource string) ([]byte, error) {
 	tempDir, err := os.MkdirTemp("", "resume_*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
+
+	latexSource = strings.TrimSpace(strings.TrimPrefix(latexSource, "\ufeff"))
+	if normalized := extractLatexDocument(latexSource); normalized != "" {
+		latexSource = normalized
+	}
+	if latexSource == "" {
+		return nil, errors.New("no LaTeX source to compile")
+	}
 
 	texPath := filepath.Join(tempDir, "resume.tex")
 	pdfPath := filepath.Join(tempDir, "resume.pdf")
@@ -476,10 +879,8 @@ func compileToPDF(latexSource string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to write LaTeX source: %w", err)
 	}
 
-	for i := 0; i < 2; i++ {
-		if err := runPDFLatex(tempDir, texPath); err != nil {
-			return nil, err
-		}
+	if err := runLatexCompiler(tempDir, texPath); err != nil {
+		return nil, err
 	}
 
 	pdfBytes, err := os.ReadFile(pdfPath)
@@ -490,32 +891,104 @@ func compileToPDF(latexSource string) ([]byte, error) {
 	return pdfBytes, nil
 }
 
-func runPDFLatex(tempDir, texPath string) error {
-	cmd := exec.Command(
-		"pdflatex",
-		"-interaction=nonstopmode",
-		"-halt-on-error",
-		"-output-directory",
-		tempDir,
-		texPath,
-	)
+type latexCompiler struct {
+	Command string
+	Args    []string
+	Runs    int
+}
 
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		return nil
+func runLatexCompiler(tempDir, texPath string) error {
+	texFilename := filepath.Base(texPath)
+	compilers := []latexCompiler{
+		{
+			Command: "latexmk",
+			Args: []string{
+				"-pdf",
+				"-interaction=nonstopmode",
+				"-halt-on-error",
+				"-file-line-error",
+				"-output-directory=" + tempDir,
+				texFilename,
+			},
+			Runs: 1,
+		},
+		{
+			Command: "tectonic",
+			Args: []string{
+				"--keep-logs",
+				"--outdir",
+				tempDir,
+				texPath,
+			},
+			Runs: 1,
+		},
+		{
+			Command: "xelatex",
+			Args: []string{
+				"-interaction=nonstopmode",
+				"-halt-on-error",
+				"-file-line-error",
+				"-output-directory",
+				tempDir,
+				texFilename,
+			},
+			Runs: 2,
+		},
+		{
+			Command: "pdflatex",
+			Args: []string{
+				"-interaction=nonstopmode",
+				"-halt-on-error",
+				"-file-line-error",
+				"-output-directory",
+				tempDir,
+				texFilename,
+			},
+			Runs: 2,
+		},
 	}
 
-	var execErr *exec.Error
-	if errors.As(err, &execErr) && errors.Is(execErr.Err, exec.ErrNotFound) {
-		return errors.New("pdflatex not found. Please install TeX Live.")
+	attempted := make([]string, 0, len(compilers))
+	failures := make([]string, 0, len(compilers))
+	for _, compiler := range compilers {
+		if _, err := exec.LookPath(compiler.Command); err != nil {
+			continue
+		}
+
+		attempted = append(attempted, compiler.Command)
+		compilerSucceeded := true
+		for i := 0; i < compiler.Runs; i++ {
+			cmd := exec.Command(compiler.Command, compiler.Args...)
+			cmd.Dir = tempDir
+
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				var exitErr *exec.ExitError
+				if errors.As(err, &exitErr) {
+					failures = append(failures, fmt.Sprintf("%s: %s", compiler.Command, extractLatexErrorMessage(string(output))))
+					compilerSucceeded = false
+					break
+				}
+				failures = append(failures, fmt.Sprintf("%s: failed to run command (%v)", compiler.Command, err))
+				compilerSucceeded = false
+				break
+			}
+		}
+
+		if compilerSucceeded {
+			return nil
+		}
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return fmt.Errorf("pdflatex compilation failed: %s", extractLatexErrorMessage(string(output)))
+	if len(attempted) == 0 {
+		return errors.New("no LaTeX compiler found. Install TeX Live/MacTeX (pdflatex or xelatex), latexmk, or tectonic")
 	}
 
-	return fmt.Errorf("failed to run pdflatex: %w", err)
+	if len(failures) == 0 {
+		return fmt.Errorf("LaTeX compilation failed after trying: %s", strings.Join(attempted, ", "))
+	}
+
+	return fmt.Errorf("LaTeX compilation failed after trying %s. %s", strings.Join(attempted, ", "), failures[0])
 }
 
 func extractLatexErrorMessage(logOutput string) string {
@@ -532,7 +1005,21 @@ func extractLatexErrorMessage(logOutput string) string {
 	}
 
 	if len(errorsFound) == 0 {
-		return "LaTeX compilation failed. Check your document syntax."
+		tail := make([]string, 0, 5)
+		for i := len(lines) - 1; i >= 0 && len(tail) < 5; i-- {
+			line := strings.TrimSpace(lines[i])
+			if line != "" {
+				tail = append(tail, line)
+			}
+		}
+		if len(tail) == 0 {
+			return "LaTeX compilation failed. Check your document syntax."
+		}
+
+		for i, j := 0, len(tail)-1; i < j; i, j = i+1, j-1 {
+			tail[i], tail[j] = tail[j], tail[i]
+		}
+		return strings.Join(tail, "\n")
 	}
 
 	return strings.Join(errorsFound, "\n")

@@ -97,6 +97,15 @@ npm run dev
 | Variable | Description |
 |----------|-------------|
 | `OPENROUTER_API_KEY` | Your OpenRouter API key |
+| `OPENROUTER_MODEL` | Optional model override for backend/agents |
+| `VITE_*` | Frontend variables (must use `VITE_` prefix) |
+
+You can keep a single root `.env` at `haraesume/.env`.
+
+- Frontend reads root env via `frontend/vite.config.ts` (`envDir: '..'`)
+- Backend auto-loads `.env` from either `backend/.env` or root `../.env`
+
+Resume upload is `.tex` only. PDF is generated as output via `/api/generate-pdf`.
 
 ## LangGraph Resume Match Agents
 
