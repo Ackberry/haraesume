@@ -31,3 +31,6 @@ coverage.out
 # Temp files
 *.tmp
 *.temp
+
+#codex
+.codex
