@@ -17,14 +17,13 @@ interface CoverLetterApiResponse {
 interface ApplicationPackageResponse {
   company_name: string
   folder_path: string
-  resume_tex_path: string
   resume_pdf_path?: string
   cover_letter_latex: string
-  cover_letter_tex_path: string
   cover_letter_pdf_path?: string
   optimized_latex: string
   changes_summary: string
   pdf_warnings?: string[]
+  tex_files_deleted: boolean
 }
 
 type Step = 'upload' | 'job' | 'optimize' | 'result'
@@ -559,9 +558,8 @@ function App() {
                   {[
                     `Company: ${savedPackage.company_name}`,
                     `Folder: ${savedPackage.folder_path}`,
-                    `Resume (.tex): ${savedPackage.resume_tex_path}`,
+                    savedPackage.tex_files_deleted ? 'Temporary .tex files: deleted' : 'Temporary .tex files: not fully deleted',
                     savedPackage.resume_pdf_path ? `Resume (.pdf): ${savedPackage.resume_pdf_path}` : '',
-                    `Cover Letter (.tex): ${savedPackage.cover_letter_tex_path}`,
                     savedPackage.cover_letter_pdf_path ? `Cover Letter (.pdf): ${savedPackage.cover_letter_pdf_path}` : '',
                   ].filter(Boolean).join('\n')}
                 </div>

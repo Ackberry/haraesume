@@ -27,7 +27,7 @@ const (
 	openRouterModel            = "anthropic/claude-sonnet-4"
 	maxMultipartMemory         = 16 << 20
 	defaultResumePath          = "state/base_resume.tex"
-	defaultApplicationsRootDir = "state/applications"
+	defaultApplicationsDirName = "applications"
 	resumeOutputFilename       = "Akbari, Deep"
 	coverLetterOutputFilename  = "CV_Deep"
 )
@@ -152,14 +152,13 @@ type resumeStatusResponse struct {
 type applicationPackageResponse struct {
 	CompanyName        string   `json:"company_name"`
 	FolderPath         string   `json:"folder_path"`
-	ResumeTexPath      string   `json:"resume_tex_path"`
 	ResumePDFPath      string   `json:"resume_pdf_path,omitempty"`
 	CoverLetterTex     string   `json:"cover_letter_latex"`
-	CoverLetterTexPath string   `json:"cover_letter_tex_path"`
 	CoverLetterPDFPath string   `json:"cover_letter_pdf_path,omitempty"`
 	OptimizedLatex     string   `json:"optimized_latex"`
 	ChangesSummary     string   `json:"changes_summary"`
 	PDFWarnings        []string `json:"pdf_warnings,omitempty"`
+	TexFilesDeleted    bool     `json:"tex_files_deleted"`
 }
 
 func main() {
@@ -473,9 +472,19 @@ func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Reque
 	s.state.setOptimizedResume(optimizedLatex)
 	s.state.setCoverLetter(coverLetterLatex)
 
-	companyName := extractCompanyName(jobDescription)
+	companyName, extractErr := extractCompanyNameWithAgent(jobDescription)
+	if extractErr != nil {
+		log.Printf("company extraction agent failed, falling back to heuristic: %v", extractErr)
+		companyName = extractCompanyName(jobDescription)
+	}
 	companyDirName := sanitizeFolderName(companyName)
-	outputDir := filepath.Join(defaultApplicationsRootDir, companyDirName)
+	applicationsRootDir, err := resolveApplicationsRootDir()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to resolve applications directory: %v", err))
+		return
+	}
+
+	outputDir := filepath.Join(applicationsRootDir, companyDirName)
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create output folder: %v", err))
 		return
@@ -483,6 +492,18 @@ func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Reque
 
 	resumeTexPath := filepath.Join(outputDir, resumeOutputFilename+".tex")
 	coverLetterTexPath := filepath.Join(outputDir, coverLetterOutputFilename+".tex")
+	cleanupRan := false
+	cleanupTexFiles := func() bool {
+		resumeRemoved := removeIfExists(resumeTexPath)
+		coverRemoved := removeIfExists(coverLetterTexPath)
+		return resumeRemoved && coverRemoved
+	}
+	defer func() {
+		if !cleanupRan {
+			_ = cleanupTexFiles()
+		}
+	}()
+
 	if err := os.WriteFile(resumeTexPath, []byte(optimizedLatex), 0o600); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to save resume file: %v", err))
 		return
@@ -493,13 +514,11 @@ func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Reque
 	}
 
 	response := applicationPackageResponse{
-		CompanyName:        companyName,
-		FolderPath:         safeAbsPath(outputDir),
-		ResumeTexPath:      safeAbsPath(resumeTexPath),
-		CoverLetterTex:     coverLetterLatex,
-		CoverLetterTexPath: safeAbsPath(coverLetterTexPath),
-		OptimizedLatex:     optimizedLatex,
-		ChangesSummary:     changesSummary,
+		CompanyName:    companyName,
+		FolderPath:     safeAbsPath(outputDir),
+		CoverLetterTex: coverLetterLatex,
+		OptimizedLatex: optimizedLatex,
+		ChangesSummary: changesSummary,
 	}
 
 	var pdfWarnings []string
@@ -526,6 +545,8 @@ func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Reque
 	if len(pdfWarnings) > 0 {
 		response.PDFWarnings = pdfWarnings
 	}
+	response.TexFilesDeleted = cleanupTexFiles()
+	cleanupRan = true
 
 	writeJSON(w, http.StatusOK, response)
 }
@@ -603,6 +624,120 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorResponse{Error: message})
+}
+
+func extractCompanyNameWithAgent(jobDescription string) (string, error) {
+	jobDescription = strings.TrimSpace(strings.TrimPrefix(jobDescription, "\ufeff"))
+	if jobDescription == "" {
+		return "Unknown Company", nil
+	}
+
+	systemPrompt := `You are a company-name extraction agent.
+Extract the hiring company from the job description.
+
+Rules:
+1. Return JSON only in this exact shape: {"company_name":"..."}
+2. Use the most likely specific company name.
+3. If unavailable, return {"company_name":"Unknown Company"}.
+4. No extra keys, markdown, or commentary.`
+
+	userPrompt := fmt.Sprintf("Job description:\n%s", truncateForPrompt(jobDescription, 7000))
+	content, err := runLLM(systemPrompt, userPrompt, 120)
+	if err != nil {
+		return "", err
+	}
+
+	company := parseCompanyNameAgentOutput(content)
+	if company == "" {
+		return "", errors.New("company extraction agent returned empty output")
+	}
+	return company, nil
+}
+
+func parseCompanyNameAgentOutput(content string) string {
+	type payload struct {
+		CompanyName string `json:"company_name"`
+	}
+
+	normalized := strings.TrimSpace(content)
+	if normalized == "" {
+		return ""
+	}
+
+	var parsed payload
+	if err := json.Unmarshal([]byte(normalized), &parsed); err == nil {
+		cleaned := normalizeCompanyName(parsed.CompanyName)
+		if cleaned == "" {
+			return "Unknown Company"
+		}
+		return cleaned
+	}
+
+	normalized = strings.Trim(normalized, "` \n\r\t")
+	if strings.HasPrefix(normalized, "{") && strings.Contains(normalized, "company_name") {
+		var fallback payload
+		if err := json.Unmarshal([]byte(normalized), &fallback); err == nil {
+			cleaned := normalizeCompanyName(fallback.CompanyName)
+			if cleaned == "" {
+				return "Unknown Company"
+			}
+			return cleaned
+		}
+	}
+
+	cleaned := normalizeCompanyName(normalized)
+	if cleaned == "" {
+		return ""
+	}
+	return cleaned
+}
+
+func resolveApplicationsRootDir() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("APPLICATIONS_ROOT_PATH")); configured != "" {
+		return filepath.Abs(configured)
+	}
+
+	projectRoot, err := resolveProjectRootDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projectRoot, defaultApplicationsDirName), nil
+}
+
+func resolveProjectRootDir() (string, error) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to determine current working directory: %w", err)
+	}
+
+	if fileExists(filepath.Join(workingDir, "backend", "go.mod")) {
+		return filepath.Abs(workingDir)
+	}
+	if fileExists(filepath.Join(workingDir, "go.mod")) {
+		parent := filepath.Dir(workingDir)
+		return filepath.Abs(parent)
+	}
+	return filepath.Abs(workingDir)
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
+
+func removeIfExists(path string) bool {
+	err := os.Remove(path)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	log.Printf("failed to remove file %s: %v", path, err)
+	return false
 }
 
 func extractCompanyName(jobDescription string) string {
