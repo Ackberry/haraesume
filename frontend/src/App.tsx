@@ -90,15 +90,16 @@ const DownloadIcon = (props: IconProps) => (
   </Icon>
 )
 
+const PAGE_BG = '#d0bcb0'
+
 const cardShell = {
   borderWidth: '1px',
   borderColor: 'ink.200',
   borderRadius: '20px',
-  bgGradient: 'linear(155deg, whiteAlpha.950 0%, pastel.100 100%)',
+  bg: PAGE_BG,
   boxShadow: '0 10px 26px rgba(0, 0, 0, 0.06)',
   p: { base: 5, md: 6 },
   w: 'full',
-  textAlign: 'center',
 }
 
 function App() {
@@ -395,7 +396,7 @@ function App() {
       <Box
         borderBottomWidth="1px"
         borderColor="ink.200"
-        bgGradient="linear(180deg, whiteAlpha.900 0%, pastel.100 100%)"
+        bg={PAGE_BG}
         backdropFilter="blur(8px)"
       >
         <Container maxW="4xl" py={4}>
@@ -429,11 +430,7 @@ function App() {
                     borderRadius="full"
                     borderWidth="1px"
                     borderColor={isActive ? 'ink.800' : isComplete ? 'ink.400' : 'ink.200'}
-                    bgGradient={isActive
-                      ? 'linear(135deg, pastel.300, pastel.100)'
-                      : isComplete
-                        ? 'linear(135deg, pastel.400, pastel.100)'
-                        : 'linear(135deg, white, pastel.50)'}
+                    bg={PAGE_BG}
                     color="ink.900"
                   >
                     <Flex
@@ -467,7 +464,7 @@ function App() {
               borderRadius="14px"
               borderWidth="1px"
               borderColor="red.200"
-              bg="red.50"
+              bg={PAGE_BG}
               w="full"
               justifyContent="center"
               textAlign="center"
@@ -478,7 +475,7 @@ function App() {
           )}
 
           {step === 'upload' && (
-            <Box {...cardShell}>
+            <Box {...cardShell} textAlign="center">
               <Stack spacing={4} align="center">
                 <Box>
                   <Heading size="md" mb={1}>Upload Resume</Heading>
@@ -498,11 +495,7 @@ function App() {
                   px={4}
                   cursor="pointer"
                   transition="all 180ms ease"
-                  bgGradient={dragOver
-                    ? 'linear(130deg, pastel.200, pastel.400)'
-                    : resumeFile
-                      ? 'linear(130deg, pastel.400, pastel.100)'
-                      : 'linear(130deg, white, pastel.100)'}
+                  bg={PAGE_BG}
                   _hover={{ borderColor: 'ink.600' }}
                   onDragOver={(e) => {
                     e.preventDefault()
@@ -554,7 +547,7 @@ function App() {
                       borderRadius="14px"
                       borderWidth="1px"
                       borderColor="ink.200"
-                      bgGradient="linear(155deg, white, pastel.50)"
+                      bg={PAGE_BG}
                       fontSize="xs"
                       fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
                       lineHeight="1.55"
@@ -574,7 +567,7 @@ function App() {
           )}
 
           {step === 'job' && (
-            <Box {...cardShell}>
+            <Box {...cardShell} textAlign="center">
               <Stack spacing={4} align="center">
                 <Box>
                   <Heading size="md" mb={1}>Job Description</Heading>
@@ -586,7 +579,7 @@ function App() {
                     borderWidth="1px"
                     borderColor="ink.200"
                     borderRadius="12px"
-                    bgGradient="linear(145deg, pastel.100, white)"
+                    bg={PAGE_BG}
                     px={3}
                     py={2}
                     color="ink.700"
@@ -617,7 +610,7 @@ function App() {
           )}
 
           {step === 'optimize' && (
-            <Box {...cardShell}>
+            <Box {...cardShell} textAlign="center">
               <Stack spacing={5} align="center" textAlign="center">
                 <Flex
                   h={12}
@@ -627,7 +620,7 @@ function App() {
                   justify="center"
                   borderWidth="1px"
                   borderColor="ink.200"
-                  bgGradient="linear(150deg, pastel.100, pastel.400)"
+                  bg={PAGE_BG}
                 >
                   <SparkleIcon boxSize={6} />
                 </Flex>
@@ -669,7 +662,7 @@ function App() {
           )}
 
           {step === 'result' && (
-            <Box {...cardShell}>
+            <Box {...cardShell} textAlign="center">
               <Stack spacing={5} align="center" textAlign="center">
                 <Stack spacing={3} align="center">
                   <Box>
@@ -687,7 +680,7 @@ function App() {
                       borderRadius="14px"
                       borderWidth="1px"
                       borderColor="ink.200"
-                      bgGradient="linear(145deg, pastel.100, white)"
+                      bg={PAGE_BG}
                       whiteSpace="pre-wrap"
                       color="ink.700"
                     >
@@ -704,7 +697,7 @@ function App() {
                     borderRadius="14px"
                     borderWidth="1px"
                     borderColor="ink.200"
-                    bgGradient="linear(155deg, white, pastel.50)"
+                    bg={PAGE_BG}
                     fontSize="xs"
                     fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
                     lineHeight="1.55"
@@ -764,7 +757,7 @@ function App() {
                       borderRadius="14px"
                       borderWidth="1px"
                       borderColor="ink.200"
-                      bgGradient="linear(145deg, pastel.100, white)"
+                      bg={PAGE_BG}
                       fontSize="sm"
                       whiteSpace="pre-wrap"
                       textAlign="left"
@@ -792,7 +785,7 @@ function App() {
                       borderRadius="14px"
                       borderWidth="1px"
                       borderColor="ink.200"
-                      bgGradient="linear(155deg, white, pastel.50)"
+                      bg={PAGE_BG}
                       fontSize="xs"
                       fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
                       lineHeight="1.55"
@@ -822,7 +815,7 @@ function App() {
         </Stack>
       </Container>
 
-      <Box borderTopWidth="1px" borderColor="ink.200" bgGradient="linear(180deg, white, pastel.50)">
+      <Box borderTopWidth="1px" borderColor="ink.200" bg={PAGE_BG}>
         <Container maxW="4xl" py={4}>
           <Text color="ink.600" fontSize="sm" textAlign="center">
             Built for focused, minimal resume workflow.

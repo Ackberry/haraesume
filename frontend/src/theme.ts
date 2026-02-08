@@ -47,7 +47,7 @@ export const theme = extendTheme({
       },
       body: {
         margin: 0,
-        bgGradient: 'linear(140deg, #ffffff 0%, #f8f8f8 52%, #edf6ff 100%)',
+        bg: '#d0bcb0',
         color: 'ink.900',
       },
       '*::placeholder': {
@@ -73,12 +73,12 @@ export const theme = extendTheme({
           },
         },
         subtle: {
-          bg: 'whiteAlpha.900',
+          bg: 'transparent',
           borderWidth: '1px',
           borderColor: 'ink.300',
           color: 'ink.900',
           _hover: {
-            bg: 'pastel.100',
+            bg: 'transparent',
             borderColor: 'ink.500',
           },
         },
@@ -88,7 +88,7 @@ export const theme = extendTheme({
       variants: {
         outline: {
           borderColor: 'ink.300',
-          bg: 'whiteAlpha.900',
+          bg: 'transparent',
           _hover: {
             borderColor: 'ink.500',
           },
