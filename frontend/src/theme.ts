@@ -5,39 +5,38 @@ const config: ThemeConfig = {
   useSystemColorMode: false,
 }
 
+const mono = `'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', 'Menlo', 'Consolas', 'DejaVu Sans Mono', monospace`
+
 const fonts = {
-  heading: `'Palatino Linotype', 'Book Antiqua', 'Times New Roman', serif`,
-  body: `'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif`,
+  heading: mono,
+  body: mono,
 }
 
 export const theme = extendTheme({
   config,
   fonts,
+  fontSizes: {
+    xs: '0.875rem',
+    sm: '1rem',
+    md: '1.125rem',
+    lg: '1.3rem',
+    xl: '1.55rem',
+    '2xl': '1.95rem',
+    '3xl': '2.35rem',
+  },
   colors: {
     ...baseTheme.colors,
     ink: {
-      50: '#f8f8f8',
-      100: '#ededed',
-      200: '#dbdbdb',
-      300: '#c4c4c4',
-      400: '#adadad',
-      500: '#8d8d8d',
-      600: '#666666',
-      700: '#4a4a4a',
-      800: '#2e2e2e',
-      900: '#151515',
-    },
-    pastel: {
-      50: '#fbfdff',
-      100: '#f4f9ff',
-      200: '#ecf6ff',
-      300: '#e6f0ff',
-      400: '#e9f8f2',
-      500: '#fef6e8',
-      600: '#fceff3',
-      700: '#f3ebff',
-      800: '#eef7ff',
-      900: '#f6f3ff',
+      50: '#f5f5f5',
+      100: '#e8e8e8',
+      200: '#d4d4d4',
+      300: '#b0b0b0',
+      400: '#8c8c8c',
+      500: '#6e6e6e',
+      600: '#555555',
+      700: '#3d3d3d',
+      800: '#222222',
+      900: '#000000',
     },
   },
   styles: {
@@ -47,67 +46,68 @@ export const theme = extendTheme({
       },
       body: {
         margin: 0,
-        bg: '#d0bcb0',
+        bg: '#ffffff',
         color: 'ink.900',
-        fontStyle: 'italic',
-        fontWeight: 500,
-        letterSpacing: '0.01em',
+        fontStyle: 'normal',
+        fontWeight: 400,
+        letterSpacing: '-0.01em',
+        fontSize: '1.125rem',
+        lineHeight: 1.75,
       },
       '*::placeholder': {
-        color: 'ink.500',
+        color: 'ink.400',
       },
     },
   },
   components: {
     Button: {
       baseStyle: {
-        borderRadius: '4px',
-        fontWeight: 700,
-        fontStyle: 'italic',
-        letterSpacing: '0.01em',
+        borderRadius: '2px',
+        fontWeight: 600,
+        letterSpacing: '-0.01em',
       },
       variants: {
         solid: {
           bg: 'ink.900',
           color: 'white',
           _hover: {
-            bg: 'black',
+            bg: 'ink.800',
           },
           _disabled: {
-            bg: 'ink.500',
+            bg: 'ink.400',
           },
         },
         subtle: {
           bg: 'transparent',
           borderWidth: '1px',
-          borderColor: 'ink.600',
+          borderColor: 'ink.300',
           color: 'ink.900',
           _hover: {
             bg: 'transparent',
-            borderColor: 'ink.800',
+            borderColor: 'ink.700',
           },
         },
       },
     },
     Heading: {
       baseStyle: {
-        fontStyle: 'italic',
-        fontWeight: 700,
-        letterSpacing: '0.02em',
+        fontWeight: 600,
+        letterSpacing: '-0.02em',
       },
     },
     Textarea: {
       variants: {
         outline: {
-          borderColor: 'ink.600',
+          borderWidth: '1px',
+          borderColor: 'ink.200',
+          borderRadius: 0,
           bg: 'transparent',
-          fontStyle: 'italic',
           _hover: {
-            borderColor: 'ink.800',
+            borderColor: 'ink.400',
           },
           _focusVisible: {
-            borderColor: 'black',
-            boxShadow: '0 0 0 1px var(--chakra-colors-black)',
+            borderColor: 'ink.700',
+            boxShadow: 'none',
           },
         },
       },

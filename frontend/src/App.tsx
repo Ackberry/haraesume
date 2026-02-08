@@ -4,7 +4,6 @@ import {
   AlertIcon,
   Box,
   Button,
-  Container,
   Flex,
   Heading,
   HStack,
@@ -64,10 +63,10 @@ type Step = 'upload' | 'job' | 'optimize' | 'result'
 const STEPS: Step[] = ['upload', 'job', 'optimize', 'result']
 
 const STEP_LABELS: Record<Step, string> = {
-  upload: 'Upload',
-  job: 'Job',
-  optimize: 'Optimize',
-  result: 'Result',
+  upload: 'upload',
+  job: 'job',
+  optimize: 'optimize',
+  result: 'result',
 }
 
 const isTexFile = (file: File): boolean => file.name.toLowerCase().endsWith('.tex')
@@ -105,19 +104,24 @@ const DownloadIcon = (props: IconProps) => (
   </Icon>
 )
 
-const PAPER_BORDER = 'rgba(21, 21, 21, 0.36)'
-const PAPER_BORDER_SOFT = 'rgba(21, 21, 21, 0.22)'
-const PAPER_INSET = 'inset 0 0 0 1px rgba(255, 255, 255, 0.24)'
+/* ── Shared styles ─────────────────────────────────────── */
 
-const cardShell = {
-  borderWidth: '1px',
-  borderColor: PAPER_BORDER,
-  borderRadius: '4px',
-  bg: 'transparent',
-  boxShadow: PAPER_INSET,
-  p: { base: 5, md: 6 },
-  w: 'full',
+const codeBlock = {
+  as: 'pre' as const,
+  p: 4,
+  borderLeft: '2px solid',
+  borderColor: 'ink.200',
+  bg: 'ink.50',
+  fontSize: 'xs',
+  lineHeight: '1.6',
+  maxH: '360px',
+  overflow: 'auto',
+  whiteSpace: 'pre-wrap' as const,
+  wordBreak: 'break-word' as const,
+  textAlign: 'left' as const,
 }
+
+/* ── Component ─────────────────────────────────────────── */
 
 function App() {
   const [step, setStep] = useState<Step>('upload')
@@ -158,7 +162,7 @@ function App() {
 
   const handleFileSelect = useCallback(async (file: File) => {
     if (!isTexFile(file)) {
-      setError('Please upload a .tex file only')
+      setError('please upload a .tex file only')
       return
     }
 
@@ -186,7 +190,7 @@ function App() {
       setHasSavedResume(true)
       setStep('job')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed')
+      setError(e instanceof Error ? e.message : 'upload failed')
     } finally {
       setLoading(false)
     }
@@ -200,7 +204,7 @@ function App() {
     if (file && isTexFile(file)) {
       void handleFileSelect(file)
     } else {
-      setError('Please upload a .tex file')
+      setError('please upload a .tex file')
     }
   }, [handleFileSelect])
 
@@ -224,7 +228,7 @@ function App() {
 
   const handleJobSubmit = async () => {
     if (!jobDescription.trim()) {
-      setError('Please enter a job description')
+      setError('please enter a job description')
       return
     }
 
@@ -246,7 +250,7 @@ function App() {
 
       setStep('optimize')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save job description')
+      setError(e instanceof Error ? e.message : 'failed to save job description')
     } finally {
       setLoading(false)
     }
@@ -270,7 +274,7 @@ function App() {
       setChangesSummary(data.changes_summary)
       setStep('result')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Optimization failed')
+      setError(e instanceof Error ? e.message : 'optimization failed')
     } finally {
       setLoading(false)
     }
@@ -291,7 +295,7 @@ function App() {
       const data: CoverLetterApiResponse = await res.json()
       setCoverLetter(data.cover_letter_latex ?? data.cover_letter)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Cover letter generation failed')
+      setError(e instanceof Error ? e.message : 'cover letter generation failed')
     } finally {
       setLoading(false)
     }
@@ -327,7 +331,7 @@ function App() {
       a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Cover letter PDF generation failed')
+      setError(e instanceof Error ? e.message : 'cover letter pdf generation failed')
     } finally {
       setLoading(false)
     }
@@ -376,7 +380,7 @@ function App() {
         })
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'PDF generation failed')
+      setError(e instanceof Error ? e.message : 'pdf generation failed')
     } finally {
       setLoading(false)
     }
@@ -401,7 +405,7 @@ function App() {
       setChangesSummary(data.changes_summary)
       setCoverLetter(data.cover_letter_latex)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Combined generation failed')
+      setError(e instanceof Error ? e.message : 'combined generation failed')
     } finally {
       setLoading(false)
       setSavingPackage(false)
@@ -422,422 +426,324 @@ function App() {
   }
 
   return (
-    <Flex minH="100vh" direction="column">
-      <Container maxW="4xl" py={{ base: 4, md: 6 }} flex="1">
-        <Stack spacing={4} align="center">
-          <Box {...cardShell} textAlign="center">
-            <Stack spacing={4} align="center">
-              <Box>
-                <Heading size="md" fontWeight="bold">Targeted Resume Tailoring</Heading>
-              </Box>
+    <Flex minH="100vh" direction="column" align="center">
+      <Box as="main" maxW="4xl" w="full" flex="1" px={{ base: 6, md: 14 }} py={{ base: 8, md: 10 }}>
+        <Stack spacing={8} w="full" align="center" textAlign="center">
+          {/* Title */}
+          <Heading size="lg" mt={2}>targeted resume tailoring</Heading>
 
-              <Flex gap={2} wrap="wrap" justify="center" aria-label="Progress">
-                {STEPS.map((phase, index) => {
-                  const isComplete = currentStepIndex > index
-                  const isActive = currentStepIndex === index
+          {/* Progress */}
+          <Flex gap={1} wrap="wrap" justify="center" align="center" aria-label="Progress">
+            {STEPS.map((phase, index) => {
+              const isComplete = currentStepIndex > index
+              const isActive = currentStepIndex === index
 
-                  return (
-                    <HStack
-                      key={phase}
-                      spacing={2}
-                      px={3}
-                      py={2}
-                      borderRadius="full"
-                      borderWidth="1px"
-                      borderColor={isActive ? 'ink.900' : isComplete ? 'ink.700' : PAPER_BORDER_SOFT}
-                      bg="transparent"
-                      color="ink.900"
-                    >
-                      <Flex
-                        h={5}
-                        w={5}
-                        borderRadius="full"
-                        borderWidth="1px"
-                        borderColor="currentColor"
-                        align="center"
-                        justify="center"
-                        fontSize="xs"
-                      >
-                        {isComplete ? <CheckIcon boxSize={3} /> : index + 1}
-                      </Flex>
-                      <Text fontSize="sm" fontWeight="semibold" display={{ base: 'none', sm: 'block' }}>
-                        {STEP_LABELS[phase]}
-                      </Text>
-                    </HStack>
-                  )
-                })}
-              </Flex>
-            </Stack>
-          </Box>
+              return (
+                <HStack key={phase} spacing={0}>
+                  <Text
+                    fontSize="md"
+                    fontWeight={isActive ? 'bold' : 'normal'}
+                    color={isActive ? 'ink.900' : isComplete ? 'ink.700' : 'ink.400'}
+                    textDecoration={isActive ? 'underline' : 'none'}
+                    sx={isActive ? { textDecorationStyle: 'wavy', textUnderlineOffset: '4px' } : undefined}
+                  >
+                    {isComplete ? '✓ ' : `${index + 1}. `}{STEP_LABELS[phase]}
+                  </Text>
+                  {index < STEPS.length - 1 && (
+                    <Text color="ink.300" mx={2} fontStyle="normal">—</Text>
+                  )}
+                </HStack>
+              )
+            })}
+          </Flex>
 
+          {/* Error */}
           {error && (
             <Alert
               status="error"
-              borderRadius="14px"
-              borderWidth="1px"
-              borderColor="red.500"
               bg="transparent"
               color="ink.900"
+              borderLeft="3px solid"
+              borderColor="red.400"
+              borderRadius={0}
               w="full"
-              justifyContent="center"
-              textAlign="center"
+              px={4}
+              py={3}
             >
               <AlertIcon />
               {error}
             </Alert>
           )}
 
+          {/* ── Upload Step ──────────────────────── */}
           {step === 'upload' && (
-            <Box {...cardShell} textAlign="center">
-              <Stack spacing={4} align="center">
-                <Box>
-                  <Heading size="md" mb={1}>Upload Resume</Heading>
-                  <Text color="ink.700">Upload a `.tex` file to start tailoring your resume.</Text>
-                </Box>
+            <Stack spacing={5} w="full" align="center">
+              <Box textAlign="center">
+                <Heading size="md" mb={2}>upload resume</Heading>
+                <Text color="ink.700">upload a .tex file to start tailoring your resume.</Text>
+              </Box>
 
-                <Box
-                  w="full"
-                  minH="230px"
-                  borderWidth="1.5px"
-                  borderStyle="dashed"
-                  borderColor={dragOver ? 'ink.900' : resumeFile ? 'ink.700' : PAPER_BORDER_SOFT}
-                  borderRadius="18px"
-                  display="grid"
-                  placeItems="center"
-                  textAlign="center"
-                  px={4}
-                  cursor="pointer"
-                  transition="all 180ms ease"
-                  bg="transparent"
-                  _hover={{ borderColor: 'ink.600' }}
-                  onDragOver={(e) => {
-                    e.preventDefault()
-                    setDragOver(true)
-                  }}
-                  onDragLeave={() => setDragOver(false)}
-                  onDrop={handleDrop}
-                  onClick={openFilePicker}
-                  onKeyDown={handleUploadKeydown}
-                  tabIndex={0}
-                  role="button"
-                  aria-label="Upload LaTeX resume"
-                >
-                  <input
-                    ref={fileInputRef}
-                    id="file-input"
-                    type="file"
-                    accept=".tex"
-                    onChange={handleFileInput}
-                    style={{ display: 'none' }}
-                  />
-
-                  {loading ? (
-                    <Stack spacing={3} align="center">
-                      <Spinner size="lg" color="ink.900" thickness="3px" />
-                      <Text fontWeight="semibold">Uploading...</Text>
-                    </Stack>
-                  ) : resumeFile ? (
-                    <Stack spacing={2} align="center">
-                      <FileIcon boxSize={7} />
-                      <Text fontWeight="bold">{resumeFile.name}</Text>
-                      <Text color="ink.700">{(resumeFile.size / 1024).toFixed(1)} KB</Text>
-                    </Stack>
-                  ) : (
-                    <Stack spacing={2} align="center">
-                      <UploadIcon boxSize={8} />
-                      <Text fontWeight="bold">Drop your file here</Text>
-                      <Text color="ink.700">or click to browse</Text>
-                    </Stack>
-                  )}
-                </Box>
-
-                {resumeContent && (
-                  <Stack spacing={2} w="full">
-                    <Heading size="sm">Preview</Heading>
-                    <Box
-                      as="pre"
-                      p={4}
-                      borderRadius="14px"
-                      borderWidth="1px"
-                      borderColor={PAPER_BORDER_SOFT}
-                      bg="transparent"
-                      fontSize="xs"
-                      fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-                      fontStyle="normal"
-                      lineHeight="1.55"
-                      maxH="280px"
-                      overflow="auto"
-                      whiteSpace="pre-wrap"
-                      wordBreak="break-word"
-                      textAlign="left"
-                    >
-                      {resumeContent.slice(0, 2000)}
-                      {resumeContent.length > 2000 ? '...' : ''}
-                    </Box>
-                  </Stack>
-                )}
-              </Stack>
-            </Box>
-          )}
-
-          {step === 'job' && (
-            <Box {...cardShell} textAlign="center">
-              <Stack spacing={4} align="center">
-                <Box>
-                  <Heading size="md" mb={1}>Job Description</Heading>
-                  <Text color="ink.700">Paste the full description to align your resume and cover letter.</Text>
-                </Box>
-
-                {hasSavedResume && (
-                  <Box
-                    borderWidth="1px"
-                    borderColor={PAPER_BORDER_SOFT}
-                    borderRadius="12px"
-                    bg="transparent"
-                    px={3}
-                    py={2}
-                    color="ink.700"
-                    fontSize="sm"
-                  >
-                    Using your saved base resume. Replace it if needed.
-                  </Box>
-                )}
-
-                <Textarea
-                  w="full"
-                  minH="300px"
-                  placeholder="Paste the full job description here..."
-                  value={jobDescription}
-                  onChange={(e) => setJobDescription(e.target.value)}
+              <Box
+                w="full"
+                minH="200px"
+                borderWidth="2px"
+                borderStyle="dashed"
+                borderColor={dragOver ? 'ink.700' : resumeFile ? 'ink.500' : 'ink.300'}
+                display="grid"
+                placeItems="center"
+                textAlign="center"
+                px={4}
+                cursor="pointer"
+                transition="border-color 180ms ease"
+                bg="transparent"
+                _hover={{ borderColor: 'ink.500' }}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  setDragOver(true)
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleDrop}
+                onClick={openFilePicker}
+                onKeyDown={handleUploadKeydown}
+                tabIndex={0}
+                role="button"
+                aria-label="upload latex resume"
+              >
+                <input
+                  ref={fileInputRef}
+                  id="file-input"
+                  type="file"
+                  accept=".tex"
+                  onChange={handleFileInput}
+                  style={{ display: 'none' }}
                 />
 
-                <Flex gap={3} wrap="wrap" justify="center">
-                  <Button variant="subtle" onClick={() => setStep('upload')}>
-                    {hasSavedResume ? 'Replace Resume' : 'Back'}
-                  </Button>
-                  <Button onClick={handleJobSubmit} isDisabled={loading} leftIcon={loading ? <Spinner size="sm" /> : undefined}>
-                    {loading ? 'Saving' : 'Continue'}
-                  </Button>
-                </Flex>
-              </Stack>
-            </Box>
-          )}
-
-          {step === 'optimize' && (
-            <Box {...cardShell} textAlign="center">
-              <Stack spacing={5} align="center" textAlign="center">
-                <Flex
-                  h={12}
-                  w={12}
-                  borderRadius="full"
-                  align="center"
-                  justify="center"
-                  borderWidth="1px"
-                  borderColor={PAPER_BORDER_SOFT}
-                  bg="transparent"
-                >
-                  <SparkleIcon boxSize={6} />
-                </Flex>
-
-                <Box>
-                  <Heading size="md" mb={1}>Ready to Optimize</Heading>
-                  <Text color="ink.700" maxW="42ch">
-                    Run the optimization to produce an ATS-focused version for this role.
-                  </Text>
-                </Box>
-
-                <List spacing={2} maxW="560px" textAlign="left" color="ink.700">
-                  <ListItem>
-                    <ListIcon as={CheckIcon} color="ink.900" />
-                    Match responsibilities to your strongest impact points
-                  </ListItem>
-                  <ListItem>
-                    <ListIcon as={CheckIcon} color="ink.900" />
-                    Introduce relevant keywords naturally
-                  </ListItem>
-                  <ListItem>
-                    <ListIcon as={CheckIcon} color="ink.900" />
-                    Keep formatting ATS-safe
-                  </ListItem>
-                  <ListItem>
-                    <ListIcon as={CheckIcon} color="ink.900" />
-                    Tighten phrasing for clarity and impact
-                  </ListItem>
-                </List>
-
-                <Flex gap={3} wrap="wrap" justify="center">
-                  <Button variant="subtle" onClick={() => setStep('job')}>Back</Button>
-                  <Button onClick={handleOptimize} isDisabled={loading} leftIcon={loading ? <Spinner size="sm" /> : undefined}>
-                    {loading ? 'Optimizing' : 'Optimize Resume'}
-                  </Button>
-                </Flex>
-              </Stack>
-            </Box>
-          )}
-
-          {step === 'result' && (
-            <Box {...cardShell} textAlign="center">
-              <Stack spacing={5} align="center" textAlign="center">
-                <Stack spacing={3} align="center">
-                  <Box>
-                    <Heading size="md" mb={1}>Optimized Result</Heading>
-                    <Text color="ink.700">Review updates and export your final files.</Text>
-                  </Box>
-                  <Button variant="subtle" onClick={handleReset}>Start Over</Button>
-                </Stack>
-
-                {changesSummary && (
-                  <Stack spacing={2} w="full">
-                    <Heading size="sm">Changes</Heading>
-                    <Box
-                      p={4}
-                      borderRadius="14px"
-                      borderWidth="1px"
-                      borderColor={PAPER_BORDER_SOFT}
-                      bg="transparent"
-                      whiteSpace="pre-wrap"
-                      color="ink.700"
-                    >
-                      {changesSummary}
-                    </Box>
+                {loading ? (
+                  <Stack spacing={3} align="center">
+                    <Spinner size="lg" color="ink.900" thickness="3px" />
+                    <Text fontWeight="semibold">uploading...</Text>
+                  </Stack>
+                ) : resumeFile ? (
+                  <Stack spacing={2} align="center">
+                    <FileIcon boxSize={7} />
+                    <Text fontWeight="bold">{resumeFile.name}</Text>
+                    <Text color="ink.700">{(resumeFile.size / 1024).toFixed(1)} KB</Text>
+                  </Stack>
+                ) : (
+                  <Stack spacing={2} align="center">
+                    <UploadIcon boxSize={8} />
+                    <Text fontWeight="bold">drop your file here</Text>
+                    <Text color="ink.700">or click to browse</Text>
                   </Stack>
                 )}
+              </Box>
 
+              {resumeContent && (
                 <Stack spacing={2} w="full">
-                  <Heading size="sm">Optimized LaTeX</Heading>
-                  <Box
-                    as="pre"
-                    p={4}
-                    borderRadius="14px"
-                    borderWidth="1px"
-                    borderColor={PAPER_BORDER_SOFT}
-                    bg="transparent"
-                    fontSize="xs"
-                    fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-                    fontStyle="normal"
-                    lineHeight="1.55"
-                    maxH="360px"
-                    overflow="auto"
-                    whiteSpace="pre-wrap"
-                    wordBreak="break-word"
-                    textAlign="left"
-                  >
-                    {optimizedLatex}
+                  <Heading size="sm">preview</Heading>
+                  <Box {...codeBlock} maxH="280px">
+                    {resumeContent.slice(0, 2000)}
+                    {resumeContent.length > 2000 ? '...' : ''}
                   </Box>
                 </Stack>
+              )}
+            </Stack>
+          )}
 
-                <Flex gap={3} wrap="wrap" justify="center">
+          {/* ── Job Description Step ─────────────── */}
+          {step === 'job' && (
+            <Stack spacing={5} w="full" align="center">
+              <Box textAlign="center">
+                <Heading size="md" mb={2}>job description</Heading>
+                <Text color="ink.700">paste the full description to align your resume and cover letter.</Text>
+              </Box>
+
+              {hasSavedResume && (
+                <Text color="ink.600" fontSize="sm">
+                  using your saved base resume. replace it if needed.
+                </Text>
+              )}
+
+              <Textarea
+                w="full"
+                minH="300px"
+                placeholder="paste the full job description here..."
+                value={jobDescription}
+                onChange={(e) => setJobDescription(e.target.value)}
+              />
+
+              <Flex gap={3} wrap="wrap" justify="center">
+                <Button variant="subtle" onClick={() => setStep('upload')}>
+                  {hasSavedResume ? 'replace resume' : 'back'}
+                </Button>
+                <Button onClick={handleJobSubmit} isDisabled={loading} leftIcon={loading ? <Spinner size="sm" /> : undefined}>
+                  {loading ? 'saving' : 'continue'}
+                </Button>
+              </Flex>
+            </Stack>
+          )}
+
+          {/* ── Optimize Step ────────────────────── */}
+          {step === 'optimize' && (
+            <Stack spacing={6} w="full" align="center" textAlign="center">
+              <SparkleIcon boxSize={8} color="ink.700" />
+
+              <Box>
+                <Heading size="md" mb={2}>ready to optimize</Heading>
+                <Text color="ink.700" maxW="42ch" mx="auto">
+                  run the optimization to produce an ats-focused version for this role.
+                </Text>
+              </Box>
+
+              <List spacing={3} maxW="560px" textAlign="left" color="ink.700" fontSize="md">
+                <ListItem>
+                  <ListIcon as={CheckIcon} color="ink.900" />
+                  match responsibilities to your strongest impact points
+                </ListItem>
+                <ListItem>
+                  <ListIcon as={CheckIcon} color="ink.900" />
+                  introduce relevant keywords naturally
+                </ListItem>
+                <ListItem>
+                  <ListIcon as={CheckIcon} color="ink.900" />
+                  keep formatting ats-safe
+                </ListItem>
+                <ListItem>
+                  <ListIcon as={CheckIcon} color="ink.900" />
+                  tighten phrasing for clarity and impact
+                </ListItem>
+              </List>
+
+              <Flex gap={3} wrap="wrap" justify="center">
+                <Button variant="subtle" onClick={() => setStep('job')}>back</Button>
+                <Button onClick={handleOptimize} isDisabled={loading} leftIcon={loading ? <Spinner size="sm" /> : undefined}>
+                  {loading ? 'optimizing' : 'optimize resume'}
+                </Button>
+              </Flex>
+            </Stack>
+          )}
+
+          {/* ── Result Step ──────────────────────── */}
+          {step === 'result' && (
+            <Stack spacing={6} w="full" align="center" textAlign="center">
+              <Stack spacing={3} align="center">
+                <Box>
+                  <Heading size="md" mb={2}>optimized result</Heading>
+                  <Text color="ink.700">review updates and export your final files.</Text>
+                </Box>
+                <Button variant="subtle" onClick={handleReset}>start over</Button>
+              </Stack>
+
+              {changesSummary && (
+                <Stack spacing={2} w="full">
+                  <Heading size="sm">changes</Heading>
+                  <Box
+                    p={4}
+                    borderLeft="2px solid"
+                    borderColor="ink.300"
+                    whiteSpace="pre-wrap"
+                    color="ink.700"
+                    textAlign="left"
+                  >
+                    {changesSummary}
+                  </Box>
+                </Stack>
+              )}
+
+              <Stack spacing={2} w="full">
+                <Heading size="sm">optimized latex</Heading>
+                <Box {...codeBlock}>
+                  {optimizedLatex}
+                </Box>
+              </Stack>
+
+              <Flex gap={3} wrap="wrap" justify="center">
+                <Button
+                  onClick={handleDownloadPdf}
+                  isDisabled={loading}
+                  leftIcon={loading ? <Spinner size="sm" /> : <DownloadIcon boxSize={4} />}
+                >
+                  {loading ? 'building pdf' : 'download pdf'}
+                </Button>
+
+                <Button
+                  onClick={handleGenerateAndSavePackage}
+                  isDisabled={loading}
+                  leftIcon={loading ? <Spinner size="sm" /> : <SparkleIcon boxSize={4} />}
+                >
+                  {savingPackage ? 'generating & saving' : 'generate + save resume & cover letter'}
+                </Button>
+
+                <Button
+                  variant="subtle"
+                  onClick={handleGenerateCoverLetter}
+                  isDisabled={loading || Boolean(coverLetter)}
+                  leftIcon={coverLetter ? <CheckIcon boxSize={4} /> : <SparkleIcon boxSize={4} />}
+                >
+                  {coverLetter ? 'cover letter generated' : 'generate cover letter'}
+                </Button>
+
+                {coverLetter && (
                   <Button
-                    onClick={handleDownloadPdf}
+                    onClick={handleDownloadCoverLetterPdf}
                     isDisabled={loading}
                     leftIcon={loading ? <Spinner size="sm" /> : <DownloadIcon boxSize={4} />}
                   >
-                    {loading ? 'Building PDF' : 'Download PDF'}
+                    {loading ? 'building pdf' : 'download cover letter pdf'}
                   </Button>
+                )}
+              </Flex>
 
-                  <Button
-                    onClick={handleGenerateAndSavePackage}
-                    isDisabled={loading}
-                    leftIcon={loading ? <Spinner size="sm" /> : <SparkleIcon boxSize={4} />}
+              {savedPackage && (
+                <Stack spacing={2} w="full">
+                  <Heading size="sm">saved application package</Heading>
+                  <Box
+                    {...codeBlock}
+                    fontSize="sm"
+                    fontFamily="inherit"
                   >
-                    {savingPackage ? 'Generating & Saving' : 'Generate + Save Resume & Cover Letter'}
-                  </Button>
+                    {[
+                      `company: ${savedPackage.company_name}`,
+                      `folder: ${savedPackage.folder_path}`,
+                      savedPackage.tex_files_deleted ? 'temporary .tex files: deleted' : 'temporary .tex files: not fully deleted',
+                      savedPackage.resume_pdf_path ? `resume (.pdf): ${savedPackage.resume_pdf_path}` : '',
+                      savedPackage.cover_letter_pdf_path ? `cover letter (.pdf): ${savedPackage.cover_letter_pdf_path}` : '',
+                    ].filter(Boolean).join('\n')}
+                  </Box>
+                  {savedPackage.pdf_warnings && savedPackage.pdf_warnings.length > 0 && (
+                    <Text whiteSpace="pre-wrap" color="ink.700" textAlign="left">{savedPackage.pdf_warnings.join('\n')}</Text>
+                  )}
+                </Stack>
+              )}
+
+              {coverLetter && (
+                <Stack spacing={2} w="full" align="center">
+                  <Heading size="sm">cover letter latex</Heading>
+                  <Box {...codeBlock} w="full">
+                    {coverLetter}
+                  </Box>
 
                   <Button
                     variant="subtle"
-                    onClick={handleGenerateCoverLetter}
-                    isDisabled={loading || Boolean(coverLetter)}
-                    leftIcon={coverLetter ? <CheckIcon boxSize={4} /> : <SparkleIcon boxSize={4} />}
+                    w="fit-content"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(coverLetter)
+                    }}
                   >
-                    {coverLetter ? 'Cover Letter Generated' : 'Generate Cover Letter'}
+                    copy latex to clipboard
                   </Button>
-
-                  {coverLetter && (
-                    <Button
-                      onClick={handleDownloadCoverLetterPdf}
-                      isDisabled={loading}
-                      leftIcon={loading ? <Spinner size="sm" /> : <DownloadIcon boxSize={4} />}
-                    >
-                      {loading ? 'Building PDF' : 'Download Cover Letter PDF'}
-                    </Button>
-                  )}
-                </Flex>
-
-                {savedPackage && (
-                  <Stack spacing={2} w="full">
-                    <Heading size="sm">Saved Application Package</Heading>
-                    <Box
-                      as="pre"
-                      p={4}
-                      borderRadius="14px"
-                      borderWidth="1px"
-                      borderColor={PAPER_BORDER_SOFT}
-                      bg="transparent"
-                      fontSize="sm"
-                      whiteSpace="pre-wrap"
-                      fontStyle="normal"
-                      textAlign="left"
-                    >
-                      {[
-                        `Company: ${savedPackage.company_name}`,
-                        `Folder: ${savedPackage.folder_path}`,
-                        savedPackage.tex_files_deleted ? 'Temporary .tex files: deleted' : 'Temporary .tex files: not fully deleted',
-                        savedPackage.resume_pdf_path ? `Resume (.pdf): ${savedPackage.resume_pdf_path}` : '',
-                        savedPackage.cover_letter_pdf_path ? `Cover Letter (.pdf): ${savedPackage.cover_letter_pdf_path}` : '',
-                      ].filter(Boolean).join('\n')}
-                    </Box>
-                    {savedPackage.pdf_warnings && savedPackage.pdf_warnings.length > 0 && (
-                      <Text whiteSpace="pre-wrap" color="ink.700" textAlign="left">{savedPackage.pdf_warnings.join('\n')}</Text>
-                    )}
-                  </Stack>
-                )}
-
-                {coverLetter && (
-                  <Stack spacing={2} w="full" align="center">
-                    <Heading size="sm">Cover Letter LaTeX</Heading>
-                    <Box
-                      as="pre"
-                      p={4}
-                      borderRadius="14px"
-                      borderWidth="1px"
-                      borderColor={PAPER_BORDER_SOFT}
-                      bg="transparent"
-                      fontSize="xs"
-                      fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-                      fontStyle="normal"
-                      lineHeight="1.55"
-                      maxH="360px"
-                      overflow="auto"
-                      whiteSpace="pre-wrap"
-                      wordBreak="break-word"
-                      textAlign="left"
-                    >
-                      {coverLetter}
-                    </Box>
-
-                    <Button
-                      variant="subtle"
-                      w="fit-content"
-                      onClick={() => {
-                        void navigator.clipboard.writeText(coverLetter)
-                      }}
-                    >
-                      Copy LaTeX to Clipboard
-                    </Button>
-                  </Stack>
-                )}
-              </Stack>
-            </Box>
+                </Stack>
+              )}
+            </Stack>
           )}
         </Stack>
-      </Container>
 
-      <Box borderTopWidth="1px" borderColor={PAPER_BORDER_SOFT} bg="transparent">
-        <Container maxW="4xl" py={4}>
-          <Text color="ink.600" fontSize="sm" textAlign="center">
-            Built for focused, minimal resume workflow.
+        {/* Footer */}
+        <Box mt={12} pt={6} borderTop="1px solid" borderColor="ink.200" textAlign="center">
+          <Text color="ink.500" fontSize="sm">
+            built for focused, minimal resume workflow.
           </Text>
-        </Container>
+        </Box>
       </Box>
     </Flex>
   )
