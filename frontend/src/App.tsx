@@ -32,6 +32,21 @@ interface CoverLetterApiResponse {
   cover_letter_latex?: string
 }
 
+interface OptimizeApiResponse {
+  optimized_latex: string
+  changes_summary: string
+}
+
+interface ResumePdfApiResponse {
+  pdf_base64: string
+  filename: string
+  company_name?: string
+  folder_path?: string
+  resume_pdf_path?: string
+  pdf_warnings?: string[]
+  tex_files_deleted?: boolean
+}
+
 interface ApplicationPackageResponse {
   company_name: string
   folder_path: string
@@ -90,14 +105,16 @@ const DownloadIcon = (props: IconProps) => (
   </Icon>
 )
 
-const PAGE_BG = '#d0bcb0'
+const PAPER_BORDER = 'rgba(21, 21, 21, 0.36)'
+const PAPER_BORDER_SOFT = 'rgba(21, 21, 21, 0.22)'
+const PAPER_INSET = 'inset 0 0 0 1px rgba(255, 255, 255, 0.24)'
 
 const cardShell = {
   borderWidth: '1px',
-  borderColor: 'ink.200',
-  borderRadius: '20px',
-  bg: PAGE_BG,
-  boxShadow: '0 10px 26px rgba(0, 0, 0, 0.06)',
+  borderColor: PAPER_BORDER,
+  borderRadius: '4px',
+  bg: 'transparent',
+  boxShadow: PAPER_INSET,
   p: { base: 5, md: 6 },
   w: 'full',
 }
@@ -248,7 +265,7 @@ function App() {
         throw new Error(err.error)
       }
 
-      const data = await res.json()
+      const data: OptimizeApiResponse = await res.json()
       setOptimizedLatex(data.optimized_latex)
       setChangesSummary(data.changes_summary)
       setStep('result')
@@ -292,7 +309,7 @@ function App() {
         throw new Error(err.error)
       }
 
-      const data = await res.json()
+      const data: ResumePdfApiResponse = await res.json()
 
       const byteCharacters = atob(data.pdf_base64)
       const byteNumbers = new Array(byteCharacters.length)
@@ -328,7 +345,7 @@ function App() {
         throw new Error(err.error)
       }
 
-      const data = await res.json()
+      const data: ResumePdfApiResponse = await res.json()
 
       const byteCharacters = atob(data.pdf_base64)
       const byteNumbers = new Array(byteCharacters.length)
@@ -345,6 +362,19 @@ function App() {
       a.download = data.filename
       a.click()
       URL.revokeObjectURL(url)
+
+      if (data.company_name && data.folder_path) {
+        setSavedPackage({
+          company_name: data.company_name,
+          folder_path: data.folder_path,
+          resume_pdf_path: data.resume_pdf_path,
+          cover_letter_latex: coverLetter,
+          optimized_latex: optimizedLatex,
+          changes_summary: changesSummary,
+          pdf_warnings: data.pdf_warnings,
+          tex_files_deleted: data.tex_files_deleted ?? false,
+        })
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'PDF generation failed')
     } finally {
@@ -393,78 +423,61 @@ function App() {
 
   return (
     <Flex minH="100vh" direction="column">
-      <Box
-        borderBottomWidth="1px"
-        borderColor="ink.200"
-        bg={PAGE_BG}
-        backdropFilter="blur(8px)"
-      >
-        <Container maxW="4xl" py={4}>
-          <Stack spacing={4} align="center" textAlign="center">
-            <Flex justify="center" align="center" gap={3} wrap="wrap" w="full">
-              <Box>
-                <Text
-                  fontSize="xs"
-                  textTransform="uppercase"
-                  letterSpacing="0.08em"
-                  fontWeight="bold"
-                  color="ink.600"
-                >
-                  Resume Optimizer
-                </Text>
-                <Heading size="md" fontWeight="bold">Targeted Resume Tailoring</Heading>
-              </Box>
-            </Flex>
-
-            <Flex gap={2} wrap="wrap" justify="center" aria-label="Progress">
-              {STEPS.map((phase, index) => {
-                const isComplete = currentStepIndex > index
-                const isActive = currentStepIndex === index
-
-                return (
-                  <HStack
-                    key={phase}
-                    spacing={2}
-                    px={3}
-                    py={2}
-                    borderRadius="full"
-                    borderWidth="1px"
-                    borderColor={isActive ? 'ink.800' : isComplete ? 'ink.400' : 'ink.200'}
-                    bg={PAGE_BG}
-                    color="ink.900"
-                  >
-                    <Flex
-                      h={5}
-                      w={5}
-                      borderRadius="full"
-                      borderWidth="1px"
-                      borderColor="currentColor"
-                      align="center"
-                      justify="center"
-                      fontSize="xs"
-                    >
-                      {isComplete ? <CheckIcon boxSize={3} /> : index + 1}
-                    </Flex>
-                    <Text fontSize="sm" fontWeight="semibold" display={{ base: 'none', sm: 'block' }}>
-                      {STEP_LABELS[phase]}
-                    </Text>
-                  </HStack>
-                )
-              })}
-            </Flex>
-          </Stack>
-        </Container>
-      </Box>
-
       <Container maxW="4xl" py={{ base: 4, md: 6 }} flex="1">
         <Stack spacing={4} align="center">
+          <Box {...cardShell} textAlign="center">
+            <Stack spacing={4} align="center">
+              <Box>
+                <Heading size="md" fontWeight="bold">Targeted Resume Tailoring</Heading>
+              </Box>
+
+              <Flex gap={2} wrap="wrap" justify="center" aria-label="Progress">
+                {STEPS.map((phase, index) => {
+                  const isComplete = currentStepIndex > index
+                  const isActive = currentStepIndex === index
+
+                  return (
+                    <HStack
+                      key={phase}
+                      spacing={2}
+                      px={3}
+                      py={2}
+                      borderRadius="full"
+                      borderWidth="1px"
+                      borderColor={isActive ? 'ink.900' : isComplete ? 'ink.700' : PAPER_BORDER_SOFT}
+                      bg="transparent"
+                      color="ink.900"
+                    >
+                      <Flex
+                        h={5}
+                        w={5}
+                        borderRadius="full"
+                        borderWidth="1px"
+                        borderColor="currentColor"
+                        align="center"
+                        justify="center"
+                        fontSize="xs"
+                      >
+                        {isComplete ? <CheckIcon boxSize={3} /> : index + 1}
+                      </Flex>
+                      <Text fontSize="sm" fontWeight="semibold" display={{ base: 'none', sm: 'block' }}>
+                        {STEP_LABELS[phase]}
+                      </Text>
+                    </HStack>
+                  )
+                })}
+              </Flex>
+            </Stack>
+          </Box>
+
           {error && (
             <Alert
               status="error"
               borderRadius="14px"
               borderWidth="1px"
-              borderColor="red.200"
-              bg={PAGE_BG}
+              borderColor="red.500"
+              bg="transparent"
+              color="ink.900"
               w="full"
               justifyContent="center"
               textAlign="center"
@@ -487,7 +500,7 @@ function App() {
                   minH="230px"
                   borderWidth="1.5px"
                   borderStyle="dashed"
-                  borderColor={dragOver ? 'ink.700' : resumeFile ? 'ink.500' : 'ink.300'}
+                  borderColor={dragOver ? 'ink.900' : resumeFile ? 'ink.700' : PAPER_BORDER_SOFT}
                   borderRadius="18px"
                   display="grid"
                   placeItems="center"
@@ -495,7 +508,7 @@ function App() {
                   px={4}
                   cursor="pointer"
                   transition="all 180ms ease"
-                  bg={PAGE_BG}
+                  bg="transparent"
                   _hover={{ borderColor: 'ink.600' }}
                   onDragOver={(e) => {
                     e.preventDefault()
@@ -546,10 +559,11 @@ function App() {
                       p={4}
                       borderRadius="14px"
                       borderWidth="1px"
-                      borderColor="ink.200"
-                      bg={PAGE_BG}
+                      borderColor={PAPER_BORDER_SOFT}
+                      bg="transparent"
                       fontSize="xs"
                       fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+                      fontStyle="normal"
                       lineHeight="1.55"
                       maxH="280px"
                       overflow="auto"
@@ -577,9 +591,9 @@ function App() {
                 {hasSavedResume && (
                   <Box
                     borderWidth="1px"
-                    borderColor="ink.200"
+                    borderColor={PAPER_BORDER_SOFT}
                     borderRadius="12px"
-                    bg={PAGE_BG}
+                    bg="transparent"
                     px={3}
                     py={2}
                     color="ink.700"
@@ -619,8 +633,8 @@ function App() {
                   align="center"
                   justify="center"
                   borderWidth="1px"
-                  borderColor="ink.200"
-                  bg={PAGE_BG}
+                  borderColor={PAPER_BORDER_SOFT}
+                  bg="transparent"
                 >
                   <SparkleIcon boxSize={6} />
                 </Flex>
@@ -679,8 +693,8 @@ function App() {
                       p={4}
                       borderRadius="14px"
                       borderWidth="1px"
-                      borderColor="ink.200"
-                      bg={PAGE_BG}
+                      borderColor={PAPER_BORDER_SOFT}
+                      bg="transparent"
                       whiteSpace="pre-wrap"
                       color="ink.700"
                     >
@@ -696,10 +710,11 @@ function App() {
                     p={4}
                     borderRadius="14px"
                     borderWidth="1px"
-                    borderColor="ink.200"
-                    bg={PAGE_BG}
+                    borderColor={PAPER_BORDER_SOFT}
+                    bg="transparent"
                     fontSize="xs"
                     fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+                    fontStyle="normal"
                     lineHeight="1.55"
                     maxH="360px"
                     overflow="auto"
@@ -756,10 +771,11 @@ function App() {
                       p={4}
                       borderRadius="14px"
                       borderWidth="1px"
-                      borderColor="ink.200"
-                      bg={PAGE_BG}
+                      borderColor={PAPER_BORDER_SOFT}
+                      bg="transparent"
                       fontSize="sm"
                       whiteSpace="pre-wrap"
+                      fontStyle="normal"
                       textAlign="left"
                     >
                       {[
@@ -784,10 +800,11 @@ function App() {
                       p={4}
                       borderRadius="14px"
                       borderWidth="1px"
-                      borderColor="ink.200"
-                      bg={PAGE_BG}
+                      borderColor={PAPER_BORDER_SOFT}
+                      bg="transparent"
                       fontSize="xs"
                       fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+                      fontStyle="normal"
                       lineHeight="1.55"
                       maxH="360px"
                       overflow="auto"
@@ -815,7 +832,7 @@ function App() {
         </Stack>
       </Container>
 
-      <Box borderTopWidth="1px" borderColor="ink.200" bg={PAGE_BG}>
+      <Box borderTopWidth="1px" borderColor={PAPER_BORDER_SOFT} bg="transparent">
         <Container maxW="4xl" py={4}>
           <Text color="ink.600" fontSize="sm" textAlign="center">
             Built for focused, minimal resume workflow.

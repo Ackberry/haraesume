@@ -135,8 +135,13 @@ type coverLetterResponse struct {
 }
 
 type pdfResponse struct {
-	PDFBase64 string `json:"pdf_base64"`
-	Filename  string `json:"filename"`
+	PDFBase64       string   `json:"pdf_base64"`
+	Filename        string   `json:"filename"`
+	CompanyName     string   `json:"company_name,omitempty"`
+	FolderPath      string   `json:"folder_path,omitempty"`
+	ResumePDFPath   string   `json:"resume_pdf_path,omitempty"`
+	PDFWarnings     []string `json:"pdf_warnings,omitempty"`
+	TexFilesDeleted bool     `json:"tex_files_deleted"`
 }
 
 type healthResponse struct {
@@ -472,21 +477,9 @@ func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Reque
 	s.state.setOptimizedResume(optimizedLatex)
 	s.state.setCoverLetter(coverLetterLatex)
 
-	companyName, extractErr := extractCompanyNameWithAgent(jobDescription)
-	if extractErr != nil {
-		log.Printf("company extraction agent failed, falling back to heuristic: %v", extractErr)
-		companyName = extractCompanyName(jobDescription)
-	}
-	companyDirName := sanitizeFolderName(companyName)
-	applicationsRootDir, err := resolveApplicationsRootDir()
+	companyName, outputDir, err := prepareCompanyOutputDir(jobDescription)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to resolve applications directory: %v", err))
-		return
-	}
-
-	outputDir := filepath.Join(applicationsRootDir, companyDirName)
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create output folder: %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to prepare output folder: %v", err))
 		return
 	}
 
@@ -593,10 +586,47 @@ func (s *server) generatePDF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, pdfResponse{
-		PDFBase64: base64.StdEncoding.EncodeToString(pdfBytes),
-		Filename:  "resume.pdf",
-	})
+	jobDescription, _ := s.state.getJobDescription()
+	companyName, outputDir, err := prepareCompanyOutputDir(jobDescription)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to prepare output folder: %v", err))
+		return
+	}
+
+	resumeTexPath := filepath.Join(outputDir, resumeOutputFilename+".tex")
+	cleanupRan := false
+	cleanupTexFile := func() bool {
+		return removeIfExists(resumeTexPath)
+	}
+	defer func() {
+		if !cleanupRan {
+			_ = cleanupTexFile()
+		}
+	}()
+
+	if err := os.WriteFile(resumeTexPath, []byte(resume), 0o600); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to save resume file: %v", err))
+		return
+	}
+
+	response := pdfResponse{
+		PDFBase64:   base64.StdEncoding.EncodeToString(pdfBytes),
+		Filename:    "resume.pdf",
+		CompanyName: companyName,
+		FolderPath:  safeAbsPath(outputDir),
+	}
+
+	resumePDFPath := filepath.Join(outputDir, resumeOutputFilename+".pdf")
+	if err := os.WriteFile(resumePDFPath, pdfBytes, 0o600); err != nil {
+		response.PDFWarnings = append(response.PDFWarnings, "Resume PDF save failed: "+err.Error())
+	} else {
+		response.ResumePDFPath = safeAbsPath(resumePDFPath)
+	}
+
+	response.TexFilesDeleted = cleanupTexFile()
+	cleanupRan = true
+
+	writeJSON(w, http.StatusOK, response)
 }
 
 func withCORS(next http.Handler) http.Handler {
@@ -702,6 +732,39 @@ func resolveApplicationsRootDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(projectRoot, defaultApplicationsDirName), nil
+}
+
+func prepareCompanyOutputDir(jobDescription string) (companyName string, outputDir string, err error) {
+	companyName = resolveCompanyName(jobDescription)
+	companyDirName := sanitizeFolderName(companyName)
+
+	applicationsRootDir, err := resolveApplicationsRootDir()
+	if err != nil {
+		return "", "", err
+	}
+
+	outputDir = filepath.Join(applicationsRootDir, companyDirName)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return "", "", err
+	}
+	return companyName, outputDir, nil
+}
+
+func resolveCompanyName(jobDescription string) string {
+	jobDescription = strings.TrimSpace(jobDescription)
+	if jobDescription == "" {
+		return "Unknown Company"
+	}
+
+	companyName, extractErr := extractCompanyNameWithAgent(jobDescription)
+	if extractErr != nil {
+		log.Printf("company extraction agent failed, falling back to heuristic: %v", extractErr)
+		companyName = extractCompanyName(jobDescription)
+	}
+	if strings.TrimSpace(companyName) == "" {
+		return "Unknown Company"
+	}
+	return companyName
 }
 
 func resolveProjectRootDir() (string, error) {

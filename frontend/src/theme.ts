@@ -6,8 +6,8 @@ const config: ThemeConfig = {
 }
 
 const fonts = {
-  heading: `'Space Grotesk', 'Avenir Next', 'Trebuchet MS', sans-serif`,
-  body: `'Plus Jakarta Sans', 'Avenir Next', 'Trebuchet MS', sans-serif`,
+  heading: `'Palatino Linotype', 'Book Antiqua', 'Times New Roman', serif`,
+  body: `'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif`,
 }
 
 export const theme = extendTheme({
@@ -49,6 +49,9 @@ export const theme = extendTheme({
         margin: 0,
         bg: '#d0bcb0',
         color: 'ink.900',
+        fontStyle: 'italic',
+        fontWeight: 500,
+        letterSpacing: '0.01em',
       },
       '*::placeholder': {
         color: 'ink.500',
@@ -58,8 +61,10 @@ export const theme = extendTheme({
   components: {
     Button: {
       baseStyle: {
-        borderRadius: '12px',
-        fontWeight: 600,
+        borderRadius: '4px',
+        fontWeight: 700,
+        fontStyle: 'italic',
+        letterSpacing: '0.01em',
       },
       variants: {
         solid: {
@@ -75,25 +80,33 @@ export const theme = extendTheme({
         subtle: {
           bg: 'transparent',
           borderWidth: '1px',
-          borderColor: 'ink.300',
+          borderColor: 'ink.600',
           color: 'ink.900',
           _hover: {
             bg: 'transparent',
-            borderColor: 'ink.500',
+            borderColor: 'ink.800',
           },
         },
+      },
+    },
+    Heading: {
+      baseStyle: {
+        fontStyle: 'italic',
+        fontWeight: 700,
+        letterSpacing: '0.02em',
       },
     },
     Textarea: {
       variants: {
         outline: {
-          borderColor: 'ink.300',
+          borderColor: 'ink.600',
           bg: 'transparent',
+          fontStyle: 'italic',
           _hover: {
-            borderColor: 'ink.500',
+            borderColor: 'ink.800',
           },
           _focusVisible: {
-            borderColor: 'ink.800',
+            borderColor: 'black',
             boxShadow: '0 0 0 1px var(--chakra-colors-black)',
           },
         },
