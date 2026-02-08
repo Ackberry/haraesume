@@ -94,7 +94,8 @@ After the first upload, the backend persists your base resume. On later sessions
 | `/api/upload-resume` | POST | Upload LaTeX file (multipart) |
 | `/api/job-description` | POST | Set job description |
 | `/api/optimize` | POST | Optimize resume with AI |
-| `/api/cover-letter` | POST | Generate cover letter |
+| `/api/cover-letter` | POST | Generate formal cover letter LaTeX |
+| `/api/generate-cover-letter-pdf` | POST | Compile generated cover letter to PDF |
 | `/api/generate-pdf` | POST | Compile to PDF (base64) |
 
 ## Environment Variables

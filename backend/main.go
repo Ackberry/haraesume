@@ -21,18 +21,22 @@ import (
 )
 
 const (
-	appVersion         = "0.1.0"
-	serverAddr         = "0.0.0.0:3001"
-	openRouterBaseURL  = "https://openrouter.ai/api/v1/chat/completions"
-	openRouterModel    = "anthropic/claude-sonnet-4"
-	maxMultipartMemory = 16 << 20
-	defaultResumePath  = "state/base_resume.tex"
+	appVersion                 = "0.1.0"
+	serverAddr                 = "0.0.0.0:3001"
+	openRouterBaseURL          = "https://openrouter.ai/api/v1/chat/completions"
+	openRouterModel            = "anthropic/claude-sonnet-4"
+	maxMultipartMemory         = 16 << 20
+	defaultResumePath          = "state/base_resume.tex"
+	defaultApplicationsRootDir = "state/applications"
+	resumeOutputFilename       = "Akbari, Deep"
+	coverLetterOutputFilename  = "CV_Deep"
 )
 
 type appState struct {
 	mu                    sync.RWMutex
 	baseResume            *string
 	currentOptimized      *string
+	currentCoverLetter    *string
 	currentJobDescription *string
 }
 
@@ -42,6 +46,7 @@ func (s *appState) setBaseResume(value string) {
 	v := value
 	s.baseResume = &v
 	s.currentOptimized = nil
+	s.currentCoverLetter = nil
 }
 
 func (s *appState) setOptimizedResume(value string) {
@@ -49,6 +54,13 @@ func (s *appState) setOptimizedResume(value string) {
 	defer s.mu.Unlock()
 	v := value
 	s.currentOptimized = &v
+}
+
+func (s *appState) setCoverLetter(value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := value
+	s.currentCoverLetter = &v
 }
 
 func (s *appState) getBaseResume() (string, bool) {
@@ -78,6 +90,7 @@ func (s *appState) setJobDescription(value string) {
 	v := value
 	s.currentJobDescription = &v
 	s.currentOptimized = nil
+	s.currentCoverLetter = nil
 }
 
 func (s *appState) getJobDescription() (string, bool) {
@@ -87,6 +100,15 @@ func (s *appState) getJobDescription() (string, bool) {
 		return "", false
 	}
 	return *s.currentJobDescription, true
+}
+
+func (s *appState) getCoverLetter() (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.currentCoverLetter == nil {
+		return "", false
+	}
+	return *s.currentCoverLetter, true
 }
 
 type server struct {
@@ -108,7 +130,8 @@ type optimizeResponse struct {
 }
 
 type coverLetterResponse struct {
-	CoverLetter string `json:"cover_letter"`
+	CoverLetter      string `json:"cover_letter"`
+	CoverLetterLatex string `json:"cover_letter_latex"`
 }
 
 type pdfResponse struct {
@@ -124,6 +147,19 @@ type healthResponse struct {
 type resumeStatusResponse struct {
 	HasResume bool `json:"has_resume"`
 	Length    int  `json:"length"`
+}
+
+type applicationPackageResponse struct {
+	CompanyName        string   `json:"company_name"`
+	FolderPath         string   `json:"folder_path"`
+	ResumeTexPath      string   `json:"resume_tex_path"`
+	ResumePDFPath      string   `json:"resume_pdf_path,omitempty"`
+	CoverLetterTex     string   `json:"cover_letter_latex"`
+	CoverLetterTexPath string   `json:"cover_letter_tex_path"`
+	CoverLetterPDFPath string   `json:"cover_letter_pdf_path,omitempty"`
+	OptimizedLatex     string   `json:"optimized_latex"`
+	ChangesSummary     string   `json:"changes_summary"`
+	PDFWarnings        []string `json:"pdf_warnings,omitempty"`
 }
 
 func main() {
@@ -149,6 +185,8 @@ func main() {
 	mux.HandleFunc("/api/job-description", s.setJobDescription)
 	mux.HandleFunc("/api/optimize", s.optimizeResume)
 	mux.HandleFunc("/api/cover-letter", s.generateCoverLetter)
+	mux.HandleFunc("/api/generate-application-package", s.generateApplicationPackage)
+	mux.HandleFunc("/api/generate-cover-letter-pdf", s.generateCoverLetterPDF)
 	mux.HandleFunc("/api/generate-pdf", s.generatePDF)
 
 	handler := withCORS(mux)
@@ -394,9 +432,125 @@ func (s *server) generateCoverLetter(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("LLM error: %v", err))
 		return
 	}
+	s.state.setCoverLetter(coverLetter)
 
 	writeJSON(w, http.StatusOK, coverLetterResponse{
-		CoverLetter: coverLetter,
+		CoverLetter:      coverLetter,
+		CoverLetterLatex: coverLetter,
+	})
+}
+
+func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	resume, ok := s.state.getBaseResume()
+	if !ok {
+		writeError(w, http.StatusBadRequest, "No base resume found. Please upload a resume first.")
+		return
+	}
+
+	jobDescription, ok := s.state.getJobDescription()
+	if !ok {
+		writeError(w, http.StatusBadRequest, "No job description provided. Please set a job description first.")
+		return
+	}
+
+	optimizedLatex, changesSummary, err := optimizeResumeWithLLM(resume, jobDescription)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Resume generation failed: %v", err))
+		return
+	}
+
+	coverLetterLatex, err := generateCoverLetterWithLLM(optimizedLatex, jobDescription)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Cover letter generation failed: %v", err))
+		return
+	}
+
+	s.state.setOptimizedResume(optimizedLatex)
+	s.state.setCoverLetter(coverLetterLatex)
+
+	companyName := extractCompanyName(jobDescription)
+	companyDirName := sanitizeFolderName(companyName)
+	outputDir := filepath.Join(defaultApplicationsRootDir, companyDirName)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create output folder: %v", err))
+		return
+	}
+
+	resumeTexPath := filepath.Join(outputDir, resumeOutputFilename+".tex")
+	coverLetterTexPath := filepath.Join(outputDir, coverLetterOutputFilename+".tex")
+	if err := os.WriteFile(resumeTexPath, []byte(optimizedLatex), 0o600); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to save resume file: %v", err))
+		return
+	}
+	if err := os.WriteFile(coverLetterTexPath, []byte(coverLetterLatex), 0o600); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to save cover letter file: %v", err))
+		return
+	}
+
+	response := applicationPackageResponse{
+		CompanyName:        companyName,
+		FolderPath:         safeAbsPath(outputDir),
+		ResumeTexPath:      safeAbsPath(resumeTexPath),
+		CoverLetterTex:     coverLetterLatex,
+		CoverLetterTexPath: safeAbsPath(coverLetterTexPath),
+		OptimizedLatex:     optimizedLatex,
+		ChangesSummary:     changesSummary,
+	}
+
+	var pdfWarnings []string
+	resumePDFPath := filepath.Join(outputDir, resumeOutputFilename+".pdf")
+	resumePDF, err := compileToPDF(optimizedLatex)
+	if err != nil {
+		pdfWarnings = append(pdfWarnings, "Resume PDF generation failed: "+err.Error())
+	} else if err := os.WriteFile(resumePDFPath, resumePDF, 0o600); err != nil {
+		pdfWarnings = append(pdfWarnings, "Resume PDF save failed: "+err.Error())
+	} else {
+		response.ResumePDFPath = safeAbsPath(resumePDFPath)
+	}
+
+	coverLetterPDFPath := filepath.Join(outputDir, coverLetterOutputFilename+".pdf")
+	coverLetterPDF, err := compileToPDF(coverLetterLatex)
+	if err != nil {
+		pdfWarnings = append(pdfWarnings, "Cover letter PDF generation failed: "+err.Error())
+	} else if err := os.WriteFile(coverLetterPDFPath, coverLetterPDF, 0o600); err != nil {
+		pdfWarnings = append(pdfWarnings, "Cover letter PDF save failed: "+err.Error())
+	} else {
+		response.CoverLetterPDFPath = safeAbsPath(coverLetterPDFPath)
+	}
+
+	if len(pdfWarnings) > 0 {
+		response.PDFWarnings = pdfWarnings
+	}
+
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) generateCoverLetterPDF(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	coverLetterLatex, ok := s.state.getCoverLetter()
+	if !ok {
+		writeError(w, http.StatusBadRequest, "No generated cover letter found. Generate one first.")
+		return
+	}
+
+	pdfBytes, err := compileToPDF(coverLetterLatex)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("PDF generation failed: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, pdfResponse{
+		PDFBase64: base64.StdEncoding.EncodeToString(pdfBytes),
+		Filename:  "cover_letter.pdf",
 	})
 }
 
@@ -449,6 +603,152 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorResponse{Error: message})
+}
+
+func extractCompanyName(jobDescription string) string {
+	jobDescription = strings.TrimSpace(strings.TrimPrefix(jobDescription, "\ufeff"))
+	if jobDescription == "" {
+		return "Unknown Company"
+	}
+
+	for _, pattern := range []*regexp.Regexp{
+		companyLabelRegex,
+		companyJoinRegex,
+		companyAtRegex,
+		companyIsRegex,
+	} {
+		matches := pattern.FindStringSubmatch(jobDescription)
+		if len(matches) < 2 {
+			continue
+		}
+		company := normalizeCompanyName(matches[1])
+		if company != "" {
+			return company
+		}
+	}
+
+	lines := strings.Split(jobDescription, "\n")
+	maxLines := minInt(12, len(lines))
+	for i := 0; i < maxLines; i++ {
+		line := strings.TrimSpace(strings.TrimLeft(lines[i], "-*• \t"))
+		company := normalizeCompanyName(line)
+		if company == "" {
+			continue
+		}
+		if looksLikeCompanyName(company) {
+			return company
+		}
+	}
+
+	return "Unknown Company"
+}
+
+func normalizeCompanyName(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+
+	for _, sep := range []string{" | ", " - ", " — ", " – ", ":"} {
+		if idx := strings.Index(value, sep); idx > 0 {
+			value = value[:idx]
+		}
+	}
+
+	value = strings.Trim(value, "\"'`.,;:|()[]{} ")
+	value = strings.TrimSpace(spaceRegex.ReplaceAllString(value, " "))
+	if value == "" {
+		return ""
+	}
+	if len(value) > 100 {
+		value = strings.TrimSpace(value[:100])
+	}
+
+	return value
+}
+
+func looksLikeCompanyName(value string) bool {
+	lower := strings.ToLower(value)
+	if lower == "" {
+		return false
+	}
+
+	for _, badTerm := range []string{
+		"responsibilities",
+		"requirements",
+		"qualification",
+		"job description",
+		"position",
+		"benefits",
+		"salary",
+		"location",
+		"remote",
+		"full-time",
+		"full time",
+		"internship",
+	} {
+		if strings.Contains(lower, badTerm) {
+			return false
+		}
+	}
+
+	companyHints := []string{
+		"inc",
+		"llc",
+		"corp",
+		"corporation",
+		"technologies",
+		"technology",
+		"systems",
+		"labs",
+		"group",
+		"company",
+		"solutions",
+	}
+	if containsAny(lower, companyHints) {
+		return true
+	}
+
+	words := strings.Fields(value)
+	if len(words) == 0 || len(words) > 8 {
+		return false
+	}
+
+	capitalized := 0
+	for _, word := range words {
+		trimmed := strings.Trim(word, ".,;:()[]{}")
+		if trimmed == "" {
+			continue
+		}
+		r, _ := utf8.DecodeRuneInString(trimmed)
+		if r >= 'A' && r <= 'Z' {
+			capitalized++
+		}
+	}
+	return capitalized >= len(words)-1
+}
+
+func sanitizeFolderName(name string) string {
+	cleaned := normalizeCompanyName(name)
+	if cleaned == "" || strings.EqualFold(cleaned, "unknown company") {
+		return "Unknown Company"
+	}
+
+	cleaned = invalidPathCharRegex.ReplaceAllString(cleaned, "")
+	cleaned = strings.TrimSpace(spaceRegex.ReplaceAllString(cleaned, " "))
+	cleaned = strings.Trim(cleaned, ". ")
+	if cleaned == "" {
+		return "Unknown Company"
+	}
+	return cleaned
+}
+
+func safeAbsPath(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return absolute
 }
 
 type chatMessage struct {
@@ -536,6 +836,13 @@ var (
 	sectionHeaderRE   = regexp.MustCompile(`(?m)^\s*\\section\{([^}]+)\}`)
 	spaceRegex        = regexp.MustCompile(`[ \t]+`)
 	numberRegex       = regexp.MustCompile(`\b\d+(?:[.,]\d+)?(?:%|x|k|m|ms)?\b`)
+
+	companyLabelRegex = regexp.MustCompile(`(?im)^\s*(?:company|organization|employer)\s*[:\-]\s*([A-Z][A-Za-z0-9&.,'() \-]{1,100})\s*$`)
+	companyJoinRegex  = regexp.MustCompile(`(?is)\bjoin\s+([A-Z][A-Za-z0-9&.,'() \-]{1,80}?)(?:\s+(?:as|to|for|where|and)\b|[,\n.])`)
+	companyAtRegex    = regexp.MustCompile(`(?is)\bat\s+([A-Z][A-Za-z0-9&.,'() \-]{1,80}?)(?:\s+(?:as|to|for|where|and|is|are)\b|[,\n.])`)
+	companyIsRegex    = regexp.MustCompile(`(?is)\b([A-Z][A-Za-z0-9&.,'() \-]{1,80}?)\s+is\s+(?:a|an|the)\b`)
+
+	invalidPathCharRegex = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]`)
 )
 
 type skillCandidate struct {
@@ -860,25 +1167,31 @@ func generateCoverLetterWithLLM(resumeLatex, jobDescription string) (string, err
 		jobHighlights = []string{"Prioritize the role's strongest requirement and align to relevant candidate evidence."}
 	}
 
-	systemPrompt := `You are an expert cover letter writer and editor.
+	systemPrompt := `You are an expert cover letter writer for technical roles.
 
-Write in a natural human voice, not a template. Use these constraints:
-- Be concrete and specific; avoid vague claims.
-- Vary sentence rhythm and sentence openings. Mix short and longer sentences naturally.
-- Keep first-person voice credible and professional.
-- Align directly to this exact role and company details found in the job description.
-- Use measured confidence and avoid hype.
-- Never invent facts not present in the provided inputs.
+Write a polished, formal cover letter as a complete, compilable LaTeX document.
 
 Hard requirements:
-1. 3-4 paragraphs, 220-380 words total.
-2. Include at least two concrete examples from the resume highlights (metrics, outcomes, tools, or scope when available).
-3. Address at least two job priorities from the job description.
-4. Avoid cliches and stock phrases, including:
-   "I am excited to apply", "I believe I am a great fit", "passionate about", "team player", "fast-paced environment", "think outside the box".
-5. Avoid repetitive sentence starts (for example, do not begin most sentences with "I").
-
-Return only the final cover letter text.`
+1. Output only LaTeX from \documentclass to \end{document}.
+2. Use an article-based letter layout with formal structure:
+   - Candidate header block (name and available contact details)
+   - Date line (\today)
+   - Hiring manager / company block (use details from job description when present)
+   - Salutation ("Dear Hiring Manager," if no specific name)
+   - 3 to 4 body paragraphs
+   - Professional closing ("Sincerely,") with candidate name
+3. Keep body content to 220-380 words.
+4. Include at least two concrete resume-backed examples (tools, impact, metrics, scope).
+5. Address at least two specific job priorities.
+6. Never invent facts.
+7. Keep LaTeX simple and robust for pdflatex:
+   - \documentclass[11pt]{article}
+   - \usepackage[margin=1in]{geometry}
+   - \usepackage[hidelinks]{hyperref}
+   - \setlength{\parindent}{0pt}
+   - \setlength{\parskip}{0.8em}
+8. Escape LaTeX special characters when needed.
+9. Do not include markdown fences, explanations, or placeholders like [Company Name] unless the data is truly unavailable.`
 
 	userPrompt := fmt.Sprintf(`Write a tailored cover letter using only the factual context below.
 
@@ -899,30 +1212,27 @@ Resume plaintext context (for fact-checking):
 		truncateForPrompt(resumePlain, 6000),
 	)
 
-	draftTemp := 0.72
-	draft, err := runLLMWithTemperature(systemPrompt, userPrompt, 1200, &draftTemp)
+	draftTemp := 0.65
+	draft, err := runLLMWithTemperature(systemPrompt, userPrompt, 2200, &draftTemp)
+	if err != nil {
+		return "", err
+	}
+	draftLatex, err := parseCoverLetterLatexOutput(draft)
 	if err != nil {
 		return "", err
 	}
 
-	refineSystemPrompt := `You are a senior writing editor improving human-likeness and persuasiveness in cover letters.
+	refineSystemPrompt := `You are a senior editor improving a LaTeX cover letter draft.
 
-Evaluate and revise the draft using this rubric:
-1. Specificity and concreteness
-2. Alignment to job requirements
-3. Sentence rhythm and variety
-4. Authentic professional voice
-5. Cliche avoidance
+Preserve factual accuracy and keep the output as a full compilable LaTeX document.
 
-If any area is weak, rewrite to fix it while preserving factual accuracy.
+Improve:
+1. Formality and business-letter polish
+2. Specific alignment to the role
+3. Concision and readability
+4. LaTeX correctness (no broken commands, no markdown)
 
-Keep the final letter:
-- 3-4 paragraphs
-- under 380 words
-- professional, human, and specific
-- free of markdown, headings, or lists
-
-Return only the revised cover letter text.`
+Return only final LaTeX from \documentclass to \end{document}.`
 
 	refinePrompt := fmt.Sprintf(`Job description:
 %s
@@ -938,20 +1248,28 @@ Draft to improve:
 		truncateForPrompt(jobDescription, 5000),
 		formatBullets(jobHighlights),
 		formatBullets(resumeHighlights),
-		truncateForPrompt(draft, 5000),
+		truncateForPrompt(draftLatex, 7000),
 	)
 
-	refineTemp := 0.45
-	refined, err := runLLMWithTemperature(refineSystemPrompt, refinePrompt, 1200, &refineTemp)
+	refineTemp := 0.35
+	refined, err := runLLMWithTemperature(refineSystemPrompt, refinePrompt, 2200, &refineTemp)
 	if err != nil {
-		return cleanCoverLetterOutput(draft), nil
+		return draftLatex, nil
 	}
 
-	final := cleanCoverLetterOutput(refined)
-	if final == "" {
-		final = cleanCoverLetterOutput(draft)
+	finalLatex, err := parseCoverLetterLatexOutput(refined)
+	if err != nil {
+		return draftLatex, nil
 	}
-	return final, nil
+	return finalLatex, nil
+}
+
+func parseCoverLetterLatexOutput(content string) (string, error) {
+	latex := extractLatexDocument(content)
+	if latex == "" {
+		return "", errors.New("model output did not contain a complete LaTeX cover letter document")
+	}
+	return latex, nil
 }
 
 func runLLM(systemPrompt, userPrompt string, maxTokens int) (string, error) {
@@ -1199,28 +1517,6 @@ func truncateForPrompt(text string, maxRunes int) string {
 		return trimmed
 	}
 	return strings.TrimSpace(string(runes[:maxRunes])) + "\n...[truncated]"
-}
-
-func cleanCoverLetterOutput(text string) string {
-	cleaned := strings.TrimSpace(text)
-	if strings.HasPrefix(cleaned, "```") {
-		lines := strings.Split(cleaned, "\n")
-		if len(lines) >= 3 {
-			lines = lines[1:]
-			if strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "```") {
-				lines = lines[:len(lines)-1]
-			}
-			cleaned = strings.TrimSpace(strings.Join(lines, "\n"))
-		}
-	}
-
-	for _, prefix := range []string{"cover letter:", "final cover letter:"} {
-		lower := strings.ToLower(cleaned)
-		if strings.HasPrefix(lower, prefix) {
-			cleaned = strings.TrimSpace(cleaned[len(prefix):])
-		}
-	}
-	return cleaned
 }
 
 func compileToPDF(latexSource string) ([]byte, error) {

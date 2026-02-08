@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
 import './index.css'
 
-// Types
 interface ApiError {
   error: string
 }
@@ -10,18 +9,45 @@ interface ResumeStatus {
   has_resume: boolean
 }
 
+interface CoverLetterApiResponse {
+  cover_letter: string
+  cover_letter_latex?: string
+}
+
+interface ApplicationPackageResponse {
+  company_name: string
+  folder_path: string
+  resume_tex_path: string
+  resume_pdf_path?: string
+  cover_letter_latex: string
+  cover_letter_tex_path: string
+  cover_letter_pdf_path?: string
+  optimized_latex: string
+  changes_summary: string
+  pdf_warnings?: string[]
+}
+
 type Step = 'upload' | 'job' | 'optimize' | 'result'
+
+const STEPS: Step[] = ['upload', 'job', 'optimize', 'result']
+
+const STEP_LABELS: Record<Step, string> = {
+  upload: 'Upload',
+  job: 'Job',
+  optimize: 'Optimize',
+  result: 'Result',
+}
+
 const isTexFile = (file: File): boolean => file.name.toLowerCase().endsWith('.tex')
 
-// Icons as simple SVG components
 const UploadIcon = () => (
-  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+  <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
   </svg>
 )
 
 const FileIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
     <polyline points="14 2 14 8 20 8" />
     <line x1="16" y1="13" x2="8" y2="13" />
@@ -30,19 +56,19 @@ const FileIcon = () => (
 )
 
 const CheckIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" aria-hidden="true">
     <polyline points="20 6 9 17 4 12" />
   </svg>
 )
 
 const SparkleIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
     <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" />
   </svg>
 )
 
 const DownloadIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
   </svg>
 )
@@ -59,12 +85,17 @@ function App() {
   const [error, setError] = useState<string>('')
   const [dragOver, setDragOver] = useState<boolean>(false)
   const [hasSavedResume, setHasSavedResume] = useState<boolean>(false)
+  const [savedPackage, setSavedPackage] = useState<ApplicationPackageResponse | null>(null)
+  const [savingPackage, setSavingPackage] = useState<boolean>(false)
+
+  const currentStepIndex = STEPS.indexOf(step)
 
   useEffect(() => {
     const checkResumeStatus = async () => {
       try {
         const res = await fetch('/api/resume-status')
         if (!res.ok) return
+
         const data: ResumeStatus = await res.json()
         if (data.has_resume) {
           setHasSavedResume(true)
@@ -78,7 +109,6 @@ function App() {
     void checkResumeStatus()
   }, [])
 
-  // Handle file upload
   const handleFileSelect = useCallback(async (file: File) => {
     if (!isTexFile(file)) {
       setError('Please upload a .tex file only')
@@ -88,11 +118,9 @@ function App() {
     setResumeFile(file)
     setError('')
 
-    // Read file content for preview
     const content = await file.text()
     setResumeContent(content)
 
-    // Upload to backend
     setLoading(true)
     try {
       const formData = new FormData()
@@ -117,9 +145,10 @@ function App() {
     }
   }, [])
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setDragOver(false)
+
     const file = e.dataTransfer.files[0]
     if (file && isTexFile(file)) {
       handleFileSelect(file)
@@ -130,10 +159,22 @@ function App() {
 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file) handleFileSelect(file)
+    if (file) {
+      handleFileSelect(file)
+    }
   }, [handleFileSelect])
 
-  // Submit job description
+  const openFilePicker = useCallback(() => {
+    document.getElementById('file-input')?.click()
+  }, [])
+
+  const handleUploadKeydown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      openFilePicker()
+    }
+  }, [openFilePicker])
+
   const handleJobSubmit = async () => {
     if (!jobDescription.trim()) {
       setError('Please enter a job description')
@@ -142,6 +183,7 @@ function App() {
 
     setLoading(true)
     setError('')
+    setSavedPackage(null)
 
     try {
       const res = await fetch('/api/job-description', {
@@ -163,10 +205,10 @@ function App() {
     }
   }
 
-  // Optimize resume
   const handleOptimize = async () => {
     setLoading(true)
     setError('')
+    setSavedPackage(null)
 
     try {
       const res = await fetch('/api/optimize', { method: 'POST' })
@@ -187,7 +229,6 @@ function App() {
     }
   }
 
-  // Generate cover letter
   const handleGenerateCoverLetter = async () => {
     setLoading(true)
     setError('')
@@ -200,8 +241,8 @@ function App() {
         throw new Error(err.error)
       }
 
-      const data = await res.json()
-      setCoverLetter(data.cover_letter)
+      const data: CoverLetterApiResponse = await res.json()
+      setCoverLetter(data.cover_letter_latex ?? data.cover_letter)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Cover letter generation failed')
     } finally {
@@ -209,7 +250,42 @@ function App() {
     }
   }
 
-  // Download PDF
+  const handleDownloadCoverLetterPdf = async () => {
+    setLoading(true)
+    setError('')
+
+    try {
+      const res = await fetch('/api/generate-cover-letter-pdf', { method: 'POST' })
+
+      if (!res.ok) {
+        const err: ApiError = await res.json()
+        throw new Error(err.error)
+      }
+
+      const data = await res.json()
+
+      const byteCharacters = atob(data.pdf_base64)
+      const byteNumbers = new Array(byteCharacters.length)
+      for (let i = 0; i < byteCharacters.length; i += 1) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i)
+      }
+
+      const byteArray = new Uint8Array(byteNumbers)
+      const blob = new Blob([byteArray], { type: 'application/pdf' })
+      const url = URL.createObjectURL(blob)
+
+      const a = document.createElement('a')
+      a.href = url
+      a.download = data.filename
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Cover letter PDF generation failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleDownloadPdf = async () => {
     setLoading(true)
     setError('')
@@ -224,16 +300,16 @@ function App() {
 
       const data = await res.json()
 
-      // Convert base64 to blob and download
       const byteCharacters = atob(data.pdf_base64)
       const byteNumbers = new Array(byteCharacters.length)
-      for (let i = 0; i < byteCharacters.length; i++) {
+      for (let i = 0; i < byteCharacters.length; i += 1) {
         byteNumbers[i] = byteCharacters.charCodeAt(i)
       }
+
       const byteArray = new Uint8Array(byteNumbers)
       const blob = new Blob([byteArray], { type: 'application/pdf' })
-
       const url = URL.createObjectURL(blob)
+
       const a = document.createElement('a')
       a.href = url
       a.download = data.filename
@@ -246,7 +322,32 @@ function App() {
     }
   }
 
-  // Reset to start
+  const handleGenerateAndSavePackage = async () => {
+    setLoading(true)
+    setSavingPackage(true)
+    setError('')
+
+    try {
+      const res = await fetch('/api/generate-application-package', { method: 'POST' })
+
+      if (!res.ok) {
+        const err: ApiError = await res.json()
+        throw new Error(err.error)
+      }
+
+      const data: ApplicationPackageResponse = await res.json()
+      setSavedPackage(data)
+      setOptimizedLatex(data.optimized_latex)
+      setChangesSummary(data.changes_summary)
+      setCoverLetter(data.cover_letter_latex)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Combined generation failed')
+    } finally {
+      setLoading(false)
+      setSavingPackage(false)
+    }
+  }
+
   const handleReset = () => {
     setStep(hasSavedResume ? 'job' : 'upload')
     setResumeFile(null)
@@ -255,287 +356,241 @@ function App() {
     setOptimizedLatex('')
     setChangesSummary('')
     setCoverLetter('')
+    setSavedPackage(null)
+    setSavingPackage(false)
     setError('')
   }
 
   return (
-    <div className="gradient-bg min-h-screen">
-      {/* Header */}
-      <header className="border-b border-[var(--border-color)] px-8 py-6">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl gradient-accent flex items-center justify-center">
-              <SparkleIcon />
-            </div>
-            <h1 className="text-xl font-bold">Resume Optimizer</h1>
+    <div className="app">
+      <header className="site-header">
+        <div className="container header-inner">
+          <div>
+            <p className="label">Resume Optimizer</p>
+            <h1>Targeted Resume Tailoring</h1>
           </div>
+          <ol className="stepper" aria-label="Progress">
+            {STEPS.map((phase, index) => {
+              const isComplete = currentStepIndex > index
+              const isActive = currentStepIndex === index
+              const itemClass = `step-item${isComplete ? ' complete' : ''}${isActive ? ' active' : ''}`
 
-          {/* Progress indicator */}
-          <div className="flex items-center gap-2">
-            {(['upload', 'job', 'optimize', 'result'] as Step[]).map((s, i) => (
-              <div key={s} className="flex items-center">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all
-                  ${step === s ? 'gradient-accent text-white animate-pulse-glow' :
-                    ['upload', 'job', 'optimize', 'result'].indexOf(step) > i ?
-                      'bg-[var(--success)] text-white' : 'bg-[var(--bg-card)] text-[var(--text-muted)]'}`}>
-                  {['upload', 'job', 'optimize', 'result'].indexOf(step) > i ? <CheckIcon /> : i + 1}
-                </div>
-                {i < 3 && <div className={`w-12 h-0.5 mx-1 transition-all
-                  ${['upload', 'job', 'optimize', 'result'].indexOf(step) > i ? 'bg-[var(--success)]' : 'bg-[var(--border-color)]'}`} />}
-              </div>
-            ))}
-          </div>
+              return (
+                <li key={phase} className={itemClass}>
+                  <span className="step-index">{isComplete ? <CheckIcon /> : index + 1}</span>
+                  <span className="step-text">{STEP_LABELS[phase]}</span>
+                </li>
+              )
+            })}
+          </ol>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-4xl mx-auto px-8 py-12">
-        {/* Error display */}
+      <main className="container main">
         {error && (
-          <div className="badge badge-error mb-6 fade-in">
-            ⚠️ {error}
+          <div className="alert" role="alert">
+            {error}
           </div>
         )}
 
-        {/* Step 1: Upload */}
         {step === 'upload' && (
-          <div className="fade-in">
-            <h2 className="text-3xl font-bold mb-2">Upload Your Resume</h2>
-            <p className="text-[var(--text-secondary)] mb-8">
-              Upload your LaTeX resume (.tex file) to get started
-            </p>
+          <section className="card">
+            <div className="section-head">
+              <h2>Upload Resume</h2>
+              <p>Upload a `.tex` file to start tailoring your resume.</p>
+            </div>
 
             <div
-              className={`upload-zone ${dragOver ? 'dragover' : ''} ${resumeFile ? 'has-file' : ''}`}
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+              className={`dropzone${dragOver ? ' dragover' : ''}${resumeFile ? ' file-ready' : ''}`}
+              onDragOver={(e) => {
+                e.preventDefault()
+                setDragOver(true)
+              }}
               onDragLeave={() => setDragOver(false)}
               onDrop={handleDrop}
-              onClick={() => document.getElementById('file-input')?.click()}
+              onClick={openFilePicker}
+              onKeyDown={handleUploadKeydown}
+              tabIndex={0}
+              role="button"
+              aria-label="Upload LaTeX resume"
             >
               <input
                 id="file-input"
                 type="file"
                 accept=".tex"
-                className="hidden"
+                className="sr-only"
                 onChange={handleFileInput}
               />
 
               {loading ? (
-                <div className="flex flex-col items-center gap-4">
+                <div className="dropzone-state">
                   <div className="loader" />
-                  <p className="text-[var(--text-secondary)]">Uploading...</p>
+                  <p>Uploading...</p>
                 </div>
               ) : resumeFile ? (
-                <div className="flex flex-col items-center gap-4">
-                  <div className="text-[var(--success)]"><FileIcon /></div>
-                  <p className="font-medium">{resumeFile.name}</p>
-                  <p className="text-[var(--text-muted)] text-sm">
-                    {(resumeFile.size / 1024).toFixed(1)} KB
-                  </p>
+                <div className="dropzone-state">
+                  <FileIcon />
+                  <p className="state-main">{resumeFile.name}</p>
+                  <p className="state-sub">{(resumeFile.size / 1024).toFixed(1)} KB</p>
                 </div>
               ) : (
-                <div className="flex flex-col items-center gap-4">
-                  <div className="text-[var(--text-muted)]"><UploadIcon /></div>
-                  <div>
-                    <p className="font-medium">Drop your .tex file here</p>
-                    <p className="text-[var(--text-muted)] text-sm mt-1">
-                      or click to browse
-                    </p>
-                  </div>
+                <div className="dropzone-state">
+                  <UploadIcon />
+                  <p className="state-main">Drop your file here</p>
+                  <p className="state-sub">or click to browse</p>
                 </div>
               )}
             </div>
 
             {resumeContent && (
-              <div className="mt-8">
-                <h3 className="text-lg font-semibold mb-3">Preview</h3>
-                <div className="code-display max-h-64 overflow-y-auto">
-                  {resumeContent.slice(0, 2000)}{resumeContent.length > 2000 ? '...' : ''}
-                </div>
+              <div className="block">
+                <h3>Preview</h3>
+                <div className="code">{resumeContent.slice(0, 2000)}{resumeContent.length > 2000 ? '...' : ''}</div>
               </div>
             )}
-          </div>
+          </section>
         )}
 
-        {/* Step 2: Job Description */}
         {step === 'job' && (
-          <div className="fade-in">
-            <h2 className="text-3xl font-bold mb-2">Paste Job Description</h2>
-            <p className="text-[var(--text-secondary)] mb-8">
-              Paste the job description to tailor both your resume and cover letter
-            </p>
+          <section className="card">
+            <div className="section-head">
+              <h2>Job Description</h2>
+              <p>Paste the full description to align your resume and cover letter.</p>
+            </div>
 
             {hasSavedResume && (
-              <div className="glass-card p-4 mb-6 text-[var(--text-secondary)]">
-                Using your saved base resume. Upload a new one only if you want to replace it.
-              </div>
+              <div className="note">Using your saved base resume. Replace it if needed.</div>
             )}
 
             <textarea
-              className="input-field textarea"
+              className="textarea"
               placeholder="Paste the full job description here..."
               value={jobDescription}
               onChange={(e) => setJobDescription(e.target.value)}
             />
 
-            <div className="flex gap-4 mt-6">
-              {hasSavedResume ? (
-                <button className="btn-secondary" onClick={() => setStep('upload')}>
-                  Replace Resume
-                </button>
-              ) : (
-                <button className="btn-secondary" onClick={() => setStep('upload')}>
-                  ← Back
-                </button>
-              )}
-              <button
-                className="btn-primary flex-1 flex items-center justify-center gap-2"
-                onClick={handleJobSubmit}
-                disabled={loading}
-              >
-                {loading ? <div className="loader" /> : <>Continue →</>}
+            <div className="actions">
+              <button className="btn btn-secondary" onClick={() => setStep('upload')}>
+                {hasSavedResume ? 'Replace Resume' : 'Back'}
+              </button>
+              <button className="btn btn-primary" onClick={handleJobSubmit} disabled={loading}>
+                {loading ? <span className="inline-loader"><span className="loader" />Saving</span> : 'Continue'}
               </button>
             </div>
-          </div>
+          </section>
         )}
 
-        {/* Step 3: Optimize */}
         {step === 'optimize' && (
-          <div className="fade-in text-center py-12">
-            <div className="w-20 h-20 rounded-2xl gradient-accent flex items-center justify-center mx-auto mb-6 animate-pulse-glow">
+          <section className="card card-center">
+            <div className="icon-pill" aria-hidden="true">
               <SparkleIcon />
             </div>
-            <h2 className="text-3xl font-bold mb-4">Ready to Optimize</h2>
-            <p className="text-[var(--text-secondary)] mb-8 max-w-md mx-auto">
-              We'll analyze your resume against the job description and optimize it for ATS systems
-            </p>
+            <h2>Ready to Optimize</h2>
+            <p className="muted centered-text">Run the optimization to produce an ATS-focused version for this role.</p>
 
-            <div className="glass-card p-6 max-w-md mx-auto mb-8 text-left">
-              <h3 className="font-semibold mb-3">What we'll do:</h3>
-              <ul className="space-y-2 text-[var(--text-secondary)]">
-                <li className="flex items-center gap-2">
-                  <CheckIcon /> Tailor bullet points to job requirements
-                </li>
-                <li className="flex items-center gap-2">
-                  <CheckIcon /> Add relevant keywords naturally
-                </li>
-                <li className="flex items-center gap-2">
-                  <CheckIcon /> Ensure ATS compatibility
-                </li>
-                <li className="flex items-center gap-2">
-                  <CheckIcon /> Quantify achievements where possible
-                </li>
-              </ul>
-            </div>
+            <ul className="checklist">
+              <li><CheckIcon /> Match responsibilities to your strongest impact points</li>
+              <li><CheckIcon /> Introduce relevant keywords naturally</li>
+              <li><CheckIcon /> Keep formatting ATS-safe</li>
+              <li><CheckIcon /> Tighten phrasing for clarity and impact</li>
+            </ul>
 
-            <div className="flex gap-4 justify-center">
-              <button className="btn-secondary" onClick={() => setStep('job')}>
-                ← Back
-              </button>
-              <button
-                className="btn-primary flex items-center gap-2"
-                onClick={handleOptimize}
-                disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <div className="loader" />
-                    Optimizing...
-                  </>
-                ) : (
-                  <>
-                    <SparkleIcon /> Optimize Resume
-                  </>
-                )}
+            <div className="actions center-actions">
+              <button className="btn btn-secondary" onClick={() => setStep('job')}>Back</button>
+              <button className="btn btn-primary" onClick={handleOptimize} disabled={loading}>
+                {loading ? <span className="inline-loader"><span className="loader" />Optimizing</span> : 'Optimize Resume'}
               </button>
             </div>
-          </div>
+          </section>
         )}
 
-        {/* Step 4: Results */}
         {step === 'result' && (
-          <div className="fade-in">
-            <div className="flex items-center justify-between mb-6">
+          <section className="card">
+            <div className="result-head">
               <div>
-                <h2 className="text-3xl font-bold">Your Optimized Resume</h2>
-                <p className="text-[var(--text-secondary)]">
-                  Review the changes and download your new resume
-                </p>
+                <h2>Optimized Result</h2>
+                <p className="muted">Review updates and export your final files.</p>
               </div>
-              <button className="btn-secondary" onClick={handleReset}>
-                Start Over
-              </button>
+              <button className="btn btn-secondary" onClick={handleReset}>Start Over</button>
             </div>
 
-            {/* Changes summary */}
             {changesSummary && (
-              <div className="glass-card p-6 mb-6">
-                <h3 className="font-semibold mb-3 flex items-center gap-2">
-                  <SparkleIcon /> Changes Made
-                </h3>
-                <p className="text-[var(--text-secondary)] whitespace-pre-wrap">
-                  {changesSummary}
-                </p>
+              <div className="block">
+                <h3>Changes</h3>
+                <p className="multiline muted">{changesSummary}</p>
               </div>
             )}
 
-            {/* Optimized LaTeX */}
-            <div className="mb-6">
-              <h3 className="text-lg font-semibold mb-3">Optimized LaTeX</h3>
-              <div className="code-display max-h-96 overflow-y-auto">
-                {optimizedLatex}
-              </div>
+            <div className="block">
+              <h3>Optimized LaTeX</h3>
+              <div className="code code-large">{optimizedLatex}</div>
             </div>
 
-            {/* Action buttons */}
-            <div className="flex flex-wrap gap-4 mb-8">
-              <button
-                className="btn-primary flex items-center gap-2"
-                onClick={handleDownloadPdf}
-                disabled={loading}
-              >
-                {loading ? <div className="loader" /> : <DownloadIcon />}
-                Download PDF
+            <div className="actions wrap-actions">
+              <button className="btn btn-primary" onClick={handleDownloadPdf} disabled={loading}>
+                {loading ? <span className="inline-loader"><span className="loader" />Building PDF</span> : <><DownloadIcon />Download PDF</>}
+              </button>
+
+              <button className="btn btn-primary" onClick={handleGenerateAndSavePackage} disabled={loading}>
+                {savingPackage
+                  ? <span className="inline-loader"><span className="loader" />Generating & Saving</span>
+                  : <><SparkleIcon />Generate + Save Resume & Cover Letter</>}
               </button>
 
               <button
-                className="btn-secondary flex items-center gap-2"
+                className="btn btn-secondary"
                 onClick={handleGenerateCoverLetter}
-                disabled={loading || !!coverLetter}
+                disabled={loading || Boolean(coverLetter)}
               >
-                {coverLetter ? <CheckIcon /> : <SparkleIcon />}
-                {coverLetter ? 'Cover Letter Generated' : 'Generate Cover Letter'}
+                {coverLetter ? <><CheckIcon />Cover Letter Generated</> : <><SparkleIcon />Generate Cover Letter</>}
               </button>
+
+              {coverLetter && (
+                <button className="btn btn-primary" onClick={handleDownloadCoverLetterPdf} disabled={loading}>
+                  {loading ? <span className="inline-loader"><span className="loader" />Building PDF</span> : <><DownloadIcon />Download Cover Letter PDF</>}
+                </button>
+              )}
             </div>
 
-            {/* Cover letter */}
-            {coverLetter && (
-              <div className="glass-card p-6 fade-in">
-                <h3 className="font-semibold mb-4 flex items-center gap-2">
-                  📝 Your Cover Letter
-                </h3>
-                <div className="text-[var(--text-secondary)] whitespace-pre-wrap leading-relaxed">
-                  {coverLetter}
+            {savedPackage && (
+              <div className="block">
+                <h3>Saved Application Package</h3>
+                <div className="code">
+                  {[
+                    `Company: ${savedPackage.company_name}`,
+                    `Folder: ${savedPackage.folder_path}`,
+                    `Resume (.tex): ${savedPackage.resume_tex_path}`,
+                    savedPackage.resume_pdf_path ? `Resume (.pdf): ${savedPackage.resume_pdf_path}` : '',
+                    `Cover Letter (.tex): ${savedPackage.cover_letter_tex_path}`,
+                    savedPackage.cover_letter_pdf_path ? `Cover Letter (.pdf): ${savedPackage.cover_letter_pdf_path}` : '',
+                  ].filter(Boolean).join('\n')}
                 </div>
+                {savedPackage.pdf_warnings && savedPackage.pdf_warnings.length > 0 && (
+                  <p className="multiline muted">{savedPackage.pdf_warnings.join('\n')}</p>
+                )}
+              </div>
+            )}
+
+            {coverLetter && (
+              <div className="block">
+                <h3>Cover Letter LaTeX</h3>
+                <div className="code code-large">{coverLetter}</div>
                 <button
-                  className="btn-secondary mt-4"
+                  className="btn btn-secondary"
                   onClick={() => {
                     navigator.clipboard.writeText(coverLetter)
                   }}
                 >
-                  Copy to Clipboard
+                  Copy LaTeX to Clipboard
                 </button>
               </div>
             )}
-          </div>
+          </section>
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-[var(--border-color)] px-8 py-6 mt-auto">
-        <div className="max-w-6xl mx-auto text-center text-[var(--text-muted)] text-sm">
-          Powered by AI • LaTeX + TeX Live • Made with ♥
-        </div>
+      <footer className="site-footer">
+        <div className="container footer-inner">Built for focused, minimal resume workflow.</div>
       </footer>
     </div>
   )
