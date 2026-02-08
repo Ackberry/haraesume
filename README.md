@@ -41,6 +41,51 @@ haraesume/
 └── sample_resume.tex        # Test resume
 ```
 
+## Backend Architecture
+
+```mermaid
+flowchart LR
+  UI["React Frontend\n(frontend/src/App.tsx)"] --> API["Go HTTP Server\nbackend/main.go"]
+
+  API --> ROUTES["Route Handlers\n/upload-resume, /optimize,\n/cover-letter, /generate-application-package"]
+  ROUTES --> STATE["In-Memory App State\nbase resume, active resume,\ncover letter, job description"]
+  ROUTES --> LLM["LLM Adapter\nOpenRouter chat completions"]
+  ROUTES --> PDF["LaTeX Compiler Service\nlatexmk/tectonic/xelatex/pdflatex"]
+  ROUTES --> STORE["Filesystem Storage\nstate/base_resume.tex\napplications/<company>/"]
+
+  LLM --> OR["OpenRouter API"]
+  PDF --> FS["Generated Artifacts\nresume.pdf, cover_letter.pdf"]
+```
+
+## AI Agent Pipeline (Obsidian Canvas Style)
+
+```mermaid
+flowchart LR
+  classDef card fill:#fbf7e6,stroke:#6f6a55,stroke-width:1.5px,color:#222,rx:8,ry:8;
+  classDef result fill:#e8f4ea,stroke:#3f6f4a,stroke-width:1.5px,color:#1f3d26,rx:8,ry:8;
+
+  A["Resume Input\n(base .tex)"]:::card
+  B["Job Description Input"]:::card
+  C["Resume Optimizer Agent\n(LLM)"]:::card
+  D["Cover Letter Agent\n(LLM)"]:::card
+  E["Company Name Extractor Agent\n(LLM + fallback heuristic)"]:::card
+  F["Applications Folder Writer\napplications/<company>/"]:::card
+  G["PDF Compiler Node"]:::card
+  H["Cleanup Node\nremove generated .tex"]:::card
+  I["Final Artifacts\nAkbari, Deep.pdf\nCV_Deep.pdf"]:::result
+
+  A --> C
+  B --> C
+  C --> D
+  B --> E
+  C --> G
+  D --> G
+  E --> F
+  G --> F
+  F --> H
+  H --> I
+```
+
 ## Prerequisites
 
 - Go (1.22+)
@@ -95,6 +140,7 @@ After the first upload, the backend persists your base resume. On later sessions
 | `/api/job-description` | POST | Set job description |
 | `/api/optimize` | POST | Optimize resume with AI |
 | `/api/cover-letter` | POST | Generate formal cover letter LaTeX |
+| `/api/generate-application-package` | POST | Generate resume + cover letter, store in `applications/<company>/`, keep PDFs, delete `.tex` |
 | `/api/generate-cover-letter-pdf` | POST | Compile generated cover letter to PDF |
 | `/api/generate-pdf` | POST | Compile to PDF (base64) |
 
@@ -105,6 +151,7 @@ After the first upload, the backend persists your base resume. On later sessions
 | `OPENROUTER_API_KEY` | Your OpenRouter API key |
 | `OPENROUTER_MODEL` | Optional model override for backend/agents |
 | `RESUME_STORE_PATH` | Optional path for persisted base resume (default: `state/base_resume.tex`) |
+| `APPLICATIONS_ROOT_PATH` | Optional absolute/relative override for output root (default: `<repo>/applications`) |
 | `VITE_*` | Frontend variables (must use `VITE_` prefix) |
 
 You can keep a single root `.env` at `haraesume/.env`.
