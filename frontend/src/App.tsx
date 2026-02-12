@@ -26,11 +26,6 @@ interface ResumeStatus {
   has_resume: boolean
 }
 
-interface CoverLetterApiResponse {
-  cover_letter: string
-  cover_letter_latex?: string
-}
-
 interface OptimizeApiResponse {
   optimized_latex: string
   changes_summary: string
@@ -47,18 +42,11 @@ interface ResumePdfApiResponse {
 }
 
 interface ApplicationPackageResponse {
-  company_name: string
-  folder_path: string
-  resume_pdf_path?: string
-  cover_letter_latex: string
-  cover_letter_pdf_path?: string
-  optimized_latex: string
-  changes_summary: string
   pdf_warnings?: string[]
-  tex_files_deleted: boolean
 }
 
 type Step = 'upload' | 'job' | 'optimize' | 'result'
+type DownloadOption = 'resume' | 'resume_cv'
 
 const STEPS: Step[] = ['upload', 'job', 'optimize', 'result']
 
@@ -128,15 +116,11 @@ function App() {
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [resumeContent, setResumeContent] = useState<string>('')
   const [jobDescription, setJobDescription] = useState<string>('')
-  const [optimizedLatex, setOptimizedLatex] = useState<string>('')
-  const [changesSummary, setChangesSummary] = useState<string>('')
-  const [coverLetter, setCoverLetter] = useState<string>('')
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string>('')
   const [dragOver, setDragOver] = useState<boolean>(false)
   const [hasSavedResume, setHasSavedResume] = useState<boolean>(false)
-  const [savedPackage, setSavedPackage] = useState<ApplicationPackageResponse | null>(null)
-  const [savingPackage, setSavingPackage] = useState<boolean>(false)
+  const [selectedDownloadOption, setSelectedDownloadOption] = useState<DownloadOption | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const currentStepIndex = STEPS.indexOf(step)
@@ -234,7 +218,6 @@ function App() {
 
     setLoading(true)
     setError('')
-    setSavedPackage(null)
 
     try {
       const res = await fetch('/api/job-description', {
@@ -259,7 +242,6 @@ function App() {
   const handleOptimize = async () => {
     setLoading(true)
     setError('')
-    setSavedPackage(null)
 
     try {
       const res = await fetch('/api/optimize', { method: 'POST' })
@@ -269,9 +251,8 @@ function App() {
         throw new Error(err.error)
       }
 
-      const data: OptimizeApiResponse = await res.json()
-      setOptimizedLatex(data.optimized_latex)
-      setChangesSummary(data.changes_summary)
+      await res.json() as Promise<OptimizeApiResponse>
+      setSelectedDownloadOption(null)
       setStep('result')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'optimization failed')
@@ -280,64 +261,26 @@ function App() {
     }
   }
 
-  const handleGenerateCoverLetter = async () => {
-    setLoading(true)
-    setError('')
-
-    try {
-      const res = await fetch('/api/cover-letter', { method: 'POST' })
-
-      if (!res.ok) {
-        const err: ApiError = await res.json()
-        throw new Error(err.error)
-      }
-
-      const data: CoverLetterApiResponse = await res.json()
-      setCoverLetter(data.cover_letter_latex ?? data.cover_letter)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'cover letter generation failed')
-    } finally {
-      setLoading(false)
+  const downloadPdfFromBase64 = useCallback((pdfBase64: string, filename: string) => {
+    const byteCharacters = atob(pdfBase64)
+    const byteNumbers = new Array(byteCharacters.length)
+    for (let i = 0; i < byteCharacters.length; i += 1) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i)
     }
-  }
 
-  const handleDownloadCoverLetterPdf = async () => {
-    setLoading(true)
-    setError('')
+    const byteArray = new Uint8Array(byteNumbers)
+    const blob = new Blob([byteArray], { type: 'application/pdf' })
+    const url = URL.createObjectURL(blob)
 
-    try {
-      const res = await fetch('/api/generate-cover-letter-pdf', { method: 'POST' })
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [])
 
-      if (!res.ok) {
-        const err: ApiError = await res.json()
-        throw new Error(err.error)
-      }
-
-      const data: ResumePdfApiResponse = await res.json()
-
-      const byteCharacters = atob(data.pdf_base64)
-      const byteNumbers = new Array(byteCharacters.length)
-      for (let i = 0; i < byteCharacters.length; i += 1) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i)
-      }
-
-      const byteArray = new Uint8Array(byteNumbers)
-      const blob = new Blob([byteArray], { type: 'application/pdf' })
-      const url = URL.createObjectURL(blob)
-
-      const a = document.createElement('a')
-      a.href = url
-      a.download = data.filename
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'cover letter pdf generation failed')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleDownloadPdf = async () => {
+  const handleDownloadResumePdf = async () => {
+    setSelectedDownloadOption('resume')
     setLoading(true)
     setError('')
 
@@ -350,79 +293,61 @@ function App() {
       }
 
       const data: ResumePdfApiResponse = await res.json()
-
-      const byteCharacters = atob(data.pdf_base64)
-      const byteNumbers = new Array(byteCharacters.length)
-      for (let i = 0; i < byteCharacters.length; i += 1) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i)
-      }
-
-      const byteArray = new Uint8Array(byteNumbers)
-      const blob = new Blob([byteArray], { type: 'application/pdf' })
-      const url = URL.createObjectURL(blob)
-
-      const a = document.createElement('a')
-      a.href = url
-      a.download = data.filename
-      a.click()
-      URL.revokeObjectURL(url)
-
-      if (data.company_name && data.folder_path) {
-        setSavedPackage({
-          company_name: data.company_name,
-          folder_path: data.folder_path,
-          resume_pdf_path: data.resume_pdf_path,
-          cover_letter_latex: coverLetter,
-          optimized_latex: optimizedLatex,
-          changes_summary: changesSummary,
-          pdf_warnings: data.pdf_warnings,
-          tex_files_deleted: data.tex_files_deleted ?? false,
-        })
-      }
+      downloadPdfFromBase64(data.pdf_base64, data.filename)
     } catch (e) {
+      setSelectedDownloadOption(null)
       setError(e instanceof Error ? e.message : 'pdf generation failed')
     } finally {
       setLoading(false)
     }
   }
 
-  const handleGenerateAndSavePackage = async () => {
+  const handleDownloadResumeAndCv = async () => {
+    setSelectedDownloadOption('resume_cv')
     setLoading(true)
-    setSavingPackage(true)
     setError('')
 
     try {
-      const res = await fetch('/api/generate-application-package', { method: 'POST' })
+      const packageRes = await fetch('/api/generate-application-package', { method: 'POST' })
 
-      if (!res.ok) {
-        const err: ApiError = await res.json()
+      if (!packageRes.ok) {
+        const err: ApiError = await packageRes.json()
         throw new Error(err.error)
       }
 
-      const data: ApplicationPackageResponse = await res.json()
-      setSavedPackage(data)
-      setOptimizedLatex(data.optimized_latex)
-      setChangesSummary(data.changes_summary)
-      setCoverLetter(data.cover_letter_latex)
+      const packageData: ApplicationPackageResponse = await packageRes.json()
+
+      const [resumeRes, cvRes] = await Promise.all([
+        fetch('/api/generate-pdf', { method: 'POST' }),
+        fetch('/api/generate-cover-letter-pdf', { method: 'POST' }),
+      ])
+
+      if (!resumeRes.ok) {
+        const err: ApiError = await resumeRes.json()
+        throw new Error(err.error)
+      }
+      if (!cvRes.ok) {
+        const err: ApiError = await cvRes.json()
+        throw new Error(err.error)
+      }
+
+      const [resumeData, cvData] = await Promise.all([
+        resumeRes.json() as Promise<ResumePdfApiResponse>,
+        cvRes.json() as Promise<ResumePdfApiResponse>,
+      ])
+
+      downloadPdfFromBase64(resumeData.pdf_base64, resumeData.filename)
+      downloadPdfFromBase64(cvData.pdf_base64, cvData.filename)
+
+      if (packageData.pdf_warnings && packageData.pdf_warnings.length > 0) {
+        setError(packageData.pdf_warnings.join('\n'))
+      }
     } catch (e) {
+      setSelectedDownloadOption(null)
       setError(e instanceof Error ? e.message : 'combined generation failed')
     } finally {
       setLoading(false)
-      setSavingPackage(false)
     }
-  }
-
-  const handleReset = () => {
-    setStep(hasSavedResume ? 'job' : 'upload')
-    setResumeFile(null)
-    setResumeContent('')
-    setJobDescription('')
-    setOptimizedLatex('')
-    setChangesSummary('')
-    setCoverLetter('')
-    setSavedPackage(null)
-    setSavingPackage(false)
-    setError('')
   }
 
   return (
@@ -430,7 +355,7 @@ function App() {
       <Box as="main" maxW="4xl" w="full" flex="1" px={{ base: 6, md: 14 }} py={{ base: 8, md: 10 }}>
         <Stack spacing={8} w="full" align="center" textAlign="center">
           {/* Title */}
-          <Heading size="lg" mt={2}>targeted resume tailoring</Heading>
+          <Heading size="lg">targeted resume tailoring</Heading>
 
           {/* Progress */}
           <Flex gap={1} wrap="wrap" justify="center" align="center" aria-label="Progress">
@@ -447,7 +372,7 @@ function App() {
                     textDecoration={isActive ? 'underline' : 'none'}
                     sx={isActive ? { textDecorationStyle: 'wavy', textUnderlineOffset: '4px' } : undefined}
                   >
-                    {isComplete ? '✓ ' : `${index + 1}. `}{STEP_LABELS[phase]}
+                    {isComplete && '✓ '}{STEP_LABELS[phase]}
                   </Text>
                   {index < STEPS.length - 1 && (
                     <Text color="ink.300" mx={2} fontStyle="normal">—</Text>
@@ -626,124 +551,46 @@ function App() {
           {/* ── Result Step ──────────────────────── */}
           {step === 'result' && (
             <Stack spacing={6} w="full" align="center" textAlign="center">
-              <Stack spacing={3} align="center">
-                <Box>
-                  <Heading size="md" mb={2}>optimized result</Heading>
-                  <Text color="ink.700">review updates and export your final files.</Text>
-                </Box>
-                <Button variant="subtle" onClick={handleReset}>start over</Button>
+              <Box>
+                <Heading size="md" mb={2}>optimized result</Heading>
+                <Text color="ink.700">choose one download option.</Text>
+              </Box>
+
+              <Stack spacing={3} w="full" maxW="460px">
+                {(['resume', 'resume_cv'] as DownloadOption[]).map((option) => {
+                  const isHidden = selectedDownloadOption !== null && selectedDownloadOption !== option
+                  const isSelected = selectedDownloadOption === option
+
+                  return (
+                    <Box
+                      key={option}
+                      w="full"
+                      maxH={isHidden ? '0px' : '80px'}
+                      opacity={isHidden ? 0 : 1}
+                      transform={isHidden ? 'translateY(-4px) scale(0.98)' : 'translateY(0) scale(1)'}
+                      overflow="hidden"
+                      pointerEvents={isHidden ? 'none' : 'auto'}
+                      transition="max-height 220ms ease, opacity 220ms ease, transform 220ms ease"
+                    >
+                      <Button
+                        onClick={option === 'resume' ? handleDownloadResumePdf : handleDownloadResumeAndCv}
+                        isDisabled={loading || (selectedDownloadOption !== null && !isSelected)}
+                        leftIcon={loading && isSelected ? <Spinner size="sm" /> : <DownloadIcon boxSize={4} />}
+                        w="full"
+                        size="lg"
+                      >
+                        {option === 'resume'
+                          ? (loading && isSelected ? 'downloading resume' : 'download resume (pdf)')
+                          : (loading && isSelected ? 'downloading resume + cv' : 'download resume + cv')}
+                      </Button>
+                    </Box>
+                  )
+                })}
               </Stack>
-
-              {changesSummary && (
-                <Stack spacing={2} w="full">
-                  <Heading size="sm">changes</Heading>
-                  <Box
-                    p={4}
-                    borderLeft="2px solid"
-                    borderColor="ink.300"
-                    whiteSpace="pre-wrap"
-                    color="ink.700"
-                    textAlign="left"
-                  >
-                    {changesSummary}
-                  </Box>
-                </Stack>
-              )}
-
-              <Stack spacing={2} w="full">
-                <Heading size="sm">optimized latex</Heading>
-                <Box {...codeBlock}>
-                  {optimizedLatex}
-                </Box>
-              </Stack>
-
-              <Flex gap={3} wrap="wrap" justify="center">
-                <Button
-                  onClick={handleDownloadPdf}
-                  isDisabled={loading}
-                  leftIcon={loading ? <Spinner size="sm" /> : <DownloadIcon boxSize={4} />}
-                >
-                  {loading ? 'building pdf' : 'download pdf'}
-                </Button>
-
-                <Button
-                  onClick={handleGenerateAndSavePackage}
-                  isDisabled={loading}
-                  leftIcon={loading ? <Spinner size="sm" /> : <SparkleIcon boxSize={4} />}
-                >
-                  {savingPackage ? 'generating & saving' : 'generate + save resume & cover letter'}
-                </Button>
-
-                <Button
-                  variant="subtle"
-                  onClick={handleGenerateCoverLetter}
-                  isDisabled={loading || Boolean(coverLetter)}
-                  leftIcon={coverLetter ? <CheckIcon boxSize={4} /> : <SparkleIcon boxSize={4} />}
-                >
-                  {coverLetter ? 'cover letter generated' : 'generate cover letter'}
-                </Button>
-
-                {coverLetter && (
-                  <Button
-                    onClick={handleDownloadCoverLetterPdf}
-                    isDisabled={loading}
-                    leftIcon={loading ? <Spinner size="sm" /> : <DownloadIcon boxSize={4} />}
-                  >
-                    {loading ? 'building pdf' : 'download cover letter pdf'}
-                  </Button>
-                )}
-              </Flex>
-
-              {savedPackage && (
-                <Stack spacing={2} w="full">
-                  <Heading size="sm">saved application package</Heading>
-                  <Box
-                    {...codeBlock}
-                    fontSize="sm"
-                    fontFamily="inherit"
-                  >
-                    {[
-                      `company: ${savedPackage.company_name}`,
-                      `folder: ${savedPackage.folder_path}`,
-                      savedPackage.tex_files_deleted ? 'temporary .tex files: deleted' : 'temporary .tex files: not fully deleted',
-                      savedPackage.resume_pdf_path ? `resume (.pdf): ${savedPackage.resume_pdf_path}` : '',
-                      savedPackage.cover_letter_pdf_path ? `cover letter (.pdf): ${savedPackage.cover_letter_pdf_path}` : '',
-                    ].filter(Boolean).join('\n')}
-                  </Box>
-                  {savedPackage.pdf_warnings && savedPackage.pdf_warnings.length > 0 && (
-                    <Text whiteSpace="pre-wrap" color="ink.700" textAlign="left">{savedPackage.pdf_warnings.join('\n')}</Text>
-                  )}
-                </Stack>
-              )}
-
-              {coverLetter && (
-                <Stack spacing={2} w="full" align="center">
-                  <Heading size="sm">cover letter latex</Heading>
-                  <Box {...codeBlock} w="full">
-                    {coverLetter}
-                  </Box>
-
-                  <Button
-                    variant="subtle"
-                    w="fit-content"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(coverLetter)
-                    }}
-                  >
-                    copy latex to clipboard
-                  </Button>
-                </Stack>
-              )}
             </Stack>
           )}
         </Stack>
 
-        {/* Footer */}
-        <Box mt={12} pt={6} borderTop="1px solid" borderColor="ink.200" textAlign="center">
-          <Text color="ink.500" fontSize="sm">
-            built for focused, minimal resume workflow.
-          </Text>
-        </Box>
       </Box>
     </Flex>
   )

@@ -4,6 +4,7 @@
 # Build outputs
 /frontend/dist
 /backend/bin
+/applications
 
 # Environment
 .env

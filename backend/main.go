@@ -28,8 +28,6 @@ const (
 	maxMultipartMemory         = 16 << 20
 	defaultResumePath          = "state/base_resume.tex"
 	defaultApplicationsDirName = "applications"
-	resumeOutputFilename       = "Akbari, Deep"
-	coverLetterOutputFilename  = "CV_Deep"
 )
 
 type appState struct {
@@ -482,9 +480,11 @@ func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to prepare output folder: %v", err))
 		return
 	}
+	resumeBaseFilename := buildResumeBaseFilename(companyName)
+	cvBaseFilename := buildCVBaseFilename(companyName)
 
-	resumeTexPath := filepath.Join(outputDir, resumeOutputFilename+".tex")
-	coverLetterTexPath := filepath.Join(outputDir, coverLetterOutputFilename+".tex")
+	resumeTexPath := filepath.Join(outputDir, resumeBaseFilename+".tex")
+	coverLetterTexPath := filepath.Join(outputDir, cvBaseFilename+".tex")
 	cleanupRan := false
 	cleanupTexFiles := func() bool {
 		resumeRemoved := removeIfExists(resumeTexPath)
@@ -515,7 +515,7 @@ func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Reque
 	}
 
 	var pdfWarnings []string
-	resumePDFPath := filepath.Join(outputDir, resumeOutputFilename+".pdf")
+	resumePDFPath := filepath.Join(outputDir, resumeBaseFilename+".pdf")
 	resumePDF, err := compileToPDF(optimizedLatex)
 	if err != nil {
 		pdfWarnings = append(pdfWarnings, "Resume PDF generation failed: "+err.Error())
@@ -525,7 +525,7 @@ func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Reque
 		response.ResumePDFPath = safeAbsPath(resumePDFPath)
 	}
 
-	coverLetterPDFPath := filepath.Join(outputDir, coverLetterOutputFilename+".pdf")
+	coverLetterPDFPath := filepath.Join(outputDir, cvBaseFilename+".pdf")
 	coverLetterPDF, err := compileToPDF(coverLetterLatex)
 	if err != nil {
 		pdfWarnings = append(pdfWarnings, "Cover letter PDF generation failed: "+err.Error())
@@ -562,9 +562,13 @@ func (s *server) generateCoverLetterPDF(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	jobDescription, _ := s.state.getJobDescription()
+	companyName := resolveCompanyName(jobDescription)
+	cvFilename := buildCVBaseFilename(companyName) + ".pdf"
+
 	writeJSON(w, http.StatusOK, pdfResponse{
 		PDFBase64: base64.StdEncoding.EncodeToString(pdfBytes),
-		Filename:  "cover_letter.pdf",
+		Filename:  cvFilename,
 	})
 }
 
@@ -592,8 +596,9 @@ func (s *server) generatePDF(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to prepare output folder: %v", err))
 		return
 	}
+	resumeBaseFilename := buildResumeBaseFilename(companyName)
 
-	resumeTexPath := filepath.Join(outputDir, resumeOutputFilename+".tex")
+	resumeTexPath := filepath.Join(outputDir, resumeBaseFilename+".tex")
 	cleanupRan := false
 	cleanupTexFile := func() bool {
 		return removeIfExists(resumeTexPath)
@@ -611,12 +616,12 @@ func (s *server) generatePDF(w http.ResponseWriter, r *http.Request) {
 
 	response := pdfResponse{
 		PDFBase64:   base64.StdEncoding.EncodeToString(pdfBytes),
-		Filename:    "resume.pdf",
+		Filename:    resumeBaseFilename + ".pdf",
 		CompanyName: companyName,
 		FolderPath:  safeAbsPath(outputDir),
 	}
 
-	resumePDFPath := filepath.Join(outputDir, resumeOutputFilename+".pdf")
+	resumePDFPath := filepath.Join(outputDir, resumeBaseFilename+".pdf")
 	if err := os.WriteFile(resumePDFPath, pdfBytes, 0o600); err != nil {
 		response.PDFWarnings = append(response.PDFWarnings, "Resume PDF save failed: "+err.Error())
 	} else {
@@ -939,6 +944,29 @@ func sanitizeFolderName(name string) string {
 		return "Unknown Company"
 	}
 	return cleaned
+}
+
+func sanitizeCompanyForFilename(name string) string {
+	cleaned := normalizeCompanyName(name)
+	if cleaned == "" || strings.EqualFold(cleaned, "unknown company") {
+		return "Unknown Company"
+	}
+
+	cleaned = invalidPathCharRegex.ReplaceAllString(cleaned, "")
+	cleaned = strings.TrimSpace(spaceRegex.ReplaceAllString(cleaned, " "))
+	cleaned = strings.Trim(cleaned, ". ")
+	if cleaned == "" {
+		return "Unknown Company"
+	}
+	return cleaned
+}
+
+func buildResumeBaseFilename(companyName string) string {
+	return fmt.Sprintf("Akbari, Deep[(%s)]", sanitizeCompanyForFilename(companyName))
+}
+
+func buildCVBaseFilename(companyName string) string {
+	return fmt.Sprintf("CV_[%s]", sanitizeCompanyForFilename(companyName))
 }
 
 func safeAbsPath(path string) string {
