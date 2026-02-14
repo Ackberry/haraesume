@@ -841,7 +841,7 @@ func (v *auth0Validator) ValidateToken(ctx context.Context, token string) error 
 		return fmt.Errorf("jwt signature verification failed: %w", err)
 	}
 
-	if strings.TrimSpace(claims.Iss) != v.issuer {
+	if normalizeIssuer(strings.TrimSpace(claims.Iss)) != normalizeIssuer(v.issuer) {
 		return fmt.Errorf("issuer mismatch")
 	}
 	if !claimHasAudience(claims.Aud, v.audience) {
@@ -983,6 +983,11 @@ func claimHasAudience(rawAud any, expected string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeIssuer(raw string) string {
+	issuer := strings.TrimSpace(raw)
+	return strings.TrimRight(issuer, "/")
 }
 
 func extractCompanyNameWithAgent(jobDescription string) (string, error) {

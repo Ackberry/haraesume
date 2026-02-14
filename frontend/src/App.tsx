@@ -129,6 +129,7 @@ function App() {
   const {
     isAuthenticated,
     isLoading: isAuthLoading,
+    error: auth0Error,
     loginWithRedirect,
     logout,
     getAccessTokenSilently,
@@ -159,19 +160,27 @@ function App() {
 
   const handleSignIn = useCallback(async () => {
     setError('')
-    await loginWithRedirect({
-      authorizationParams: auth0Audience ? { audience: auth0Audience } : undefined,
-    })
+    try {
+      await loginWithRedirect({
+        authorizationParams: auth0Audience ? { audience: auth0Audience } : undefined,
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'sign in failed')
+    }
   }, [loginWithRedirect])
 
   const handleSignUp = useCallback(async () => {
     setError('')
-    await loginWithRedirect({
-      authorizationParams: {
-        ...(auth0Audience ? { audience: auth0Audience } : {}),
-        screen_hint: 'signup',
-      },
-    })
+    try {
+      await loginWithRedirect({
+        authorizationParams: {
+          ...(auth0Audience ? { audience: auth0Audience } : {}),
+          screen_hint: 'signup',
+        },
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'sign up failed')
+    }
   }, [loginWithRedirect])
 
   const handleLogout = useCallback(() => {
@@ -433,11 +442,27 @@ function App() {
               {error}
             </Alert>
           )}
+          {auth0Error && (
+            <Alert
+              status="error"
+              bg="transparent"
+              color="ink.900"
+              borderLeft="3px solid"
+              borderColor="red.400"
+              borderRadius={0}
+              w="full"
+              px={4}
+              py={3}
+            >
+              <AlertIcon />
+              {auth0Error.message}
+            </Alert>
+          )}
           <Flex gap={3} wrap="wrap" justify="center">
-            <Button onClick={() => void handleSignIn()}>
+            <Button type="button" onClick={() => void handleSignIn()}>
               sign in
             </Button>
-            <Button variant="subtle" onClick={() => void handleSignUp()}>
+            <Button type="button" variant="subtle" onClick={() => void handleSignUp()}>
               create account
             </Button>
           </Flex>
