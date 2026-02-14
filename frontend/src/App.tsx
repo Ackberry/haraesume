@@ -434,7 +434,7 @@ function App() {
             </Alert>
           )}
           <Flex gap={3} wrap="wrap" justify="center">
-            <Button onClick={() => void handleSignIn()} leftIcon={<CheckIcon boxSize={4} />}>
+            <Button onClick={() => void handleSignIn()}>
               sign in
             </Button>
             <Button variant="subtle" onClick={() => void handleSignUp()}>
