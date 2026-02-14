@@ -14,7 +14,7 @@ A full-stack web application that optimizes LaTeX resumes for specific job descr
 - Cover Letter Generation - Creates personalized cover letters
 - PDF Export - Compiles optimized LaTeX to downloadable PDF
 - ATS-Friendly - Keeps formatting compatible with applicant tracking systems
-- Persistent Base Resume - Upload once, then reuse the same baseline resume for future job descriptions
+- Persistent Per-User Base Resume - each authenticated user uploads once, then reuses their own baseline resume
 
 ## Tech Stack
 
@@ -48,10 +48,10 @@ flowchart LR
   UI["React Frontend\n(frontend/src/App.tsx)"] --> API["Go HTTP Server\nbackend/main.go"]
 
   API --> ROUTES["Route Handlers\n/upload-resume, /optimize,\n/cover-letter, /generate-application-package"]
-  ROUTES --> STATE["In-Memory App State\nbase resume, active resume,\ncover letter, job description"]
+  ROUTES --> STATE["Per-User In-Memory App State\nbase resume, active resume,\ncover letter, job description"]
   ROUTES --> LLM["LLM Adapter\nOpenRouter chat completions"]
   ROUTES --> PDF["LaTeX Compiler Service\nlatexmk/tectonic/xelatex/pdflatex"]
-  ROUTES --> STORE["Filesystem Storage\nstate/base_resume.tex\napplications/<company>/"]
+  ROUTES --> STORE["Filesystem Storage\nstate/user_resumes/<user_hash>/base_resume.tex\napplications/<user_hash>/<company>/"]
 
   LLM --> OR["OpenRouter API"]
   PDF --> FS["Generated Artifacts\nresume.pdf, cover_letter.pdf"]
@@ -69,7 +69,7 @@ flowchart LR
   C["Resume Optimizer Agent\n(LLM)"]:::card
   D["Cover Letter Agent\n(LLM)"]:::card
   E["Company Name Extractor Agent\n(LLM + fallback heuristic)"]:::card
-  F["Applications Folder Writer\napplications/<company>/"]:::card
+  F["Applications Folder Writer\napplications/<user_hash>/<company>/"]:::card
   G["PDF Compiler Node"]:::card
   H["Cleanup Node\nremove generated .tex"]:::card
   I["Final Artifacts\nAkbari, Deep.pdf\nCV_Deep.pdf"]:::result
@@ -140,19 +140,19 @@ npm run dev
 5. Click **Optimize Resume**
 6. Download PDF or generate a cover letter
 
-After the first upload, the backend persists your base resume. On later sessions, you can go straight to the job description step.
+After the first upload, the backend persists your base resume for that authenticated user. On later sessions, that same user can go straight to the job description step.
 
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/api/resume-status` | GET | Whether a persisted base resume is available |
+| `/api/resume-status` | GET | Whether the current authenticated user has a persisted base resume |
 | `/api/upload-resume` | POST | Upload LaTeX file (multipart) |
 | `/api/job-description` | POST | Set job description |
 | `/api/optimize` | POST | Optimize resume with AI |
 | `/api/cover-letter` | POST | Generate formal cover letter LaTeX |
-| `/api/generate-application-package` | POST | Generate resume + cover letter, store in `applications/<company>/`, keep PDFs, delete `.tex` |
+| `/api/generate-application-package` | POST | Generate resume + cover letter, store in `applications/<user_hash>/<company>/`, keep PDFs, delete `.tex` |
 | `/api/generate-cover-letter-pdf` | POST | Compile generated cover letter to PDF |
 | `/api/generate-pdf` | POST | Compile to PDF (base64) |
 
@@ -168,7 +168,7 @@ After the first upload, the backend persists your base resume. On later sessions
 | `AUTH0_AUDIENCE` | Auth0 API Identifier used as JWT audience |
 | `AUTH0_CLIENT_ID` | Optional backend M2M use; not required for frontend user auth |
 | `AUTH0_CLIENT_SECRET` | Optional backend M2M use; keep secret server-side only |
-| `RESUME_STORE_PATH` | Optional path for persisted base resume (default: `state/base_resume.tex`) |
+| `RESUME_STORE_PATH` | Optional directory for persisted per-user resumes (default: `state/user_resumes`) |
 | `APPLICATIONS_ROOT_PATH` | Optional absolute/relative override for output root (default: `<repo>/applications`) |
 | `VITE_AUTH0_DOMAIN` | Auth0 tenant domain for frontend |
 | `VITE_AUTH0_CLIENT_ID` | Auth0 SPA application client ID |
@@ -187,6 +187,20 @@ Auth0 app settings should include:
 - Allowed Web Origins: `http://localhost:5173`
 
 Resume upload is `.tex` only. PDF is generated as output via `/api/generate-pdf`.
+
+### Railway Storage Notes
+
+- Railway ephemeral disk is cleared on redeploy/restart unless you use a volume.
+- Mount a Railway volume (example mount path: `/data`).
+- Set:
+  - `RESUME_STORE_PATH=/data/user_resumes`
+  - `APPLICATIONS_ROOT_PATH=/data/applications`
+- If these vars are unset and `/data` exists, the backend now defaults to:
+  - `/data/user_resumes` for base resumes
+  - `/data/applications` for generated application artifacts
+- With that setup:
+  - New authenticated users start with no base resume.
+  - After upload, each user keeps their own base resume across restarts/redeploys.
 
 ## LangGraph Resume Match Agents
 

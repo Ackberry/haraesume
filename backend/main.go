@@ -32,93 +32,128 @@ const (
 	openRouterBaseURL          = "https://openrouter.ai/api/v1/chat/completions"
 	openRouterModel            = "anthropic/claude-sonnet-4"
 	maxMultipartMemory         = 16 << 20
-	defaultResumePath          = "state/base_resume.tex"
+	defaultResumeStoreDir      = "state/user_resumes"
 	defaultApplicationsDirName = "applications"
+	anonymousUserID            = "anonymous-user"
 )
 
 type appState struct {
-	mu                    sync.RWMutex
+	mu    sync.RWMutex
+	users map[string]*userState
+}
+
+type userState struct {
 	baseResume            *string
 	currentOptimized      *string
 	currentCoverLetter    *string
 	currentJobDescription *string
 }
 
-func (s *appState) setBaseResume(value string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	v := value
-	s.baseResume = &v
-	s.currentOptimized = nil
-	s.currentCoverLetter = nil
+type contextKey string
+
+const authUserIDContextKey contextKey = "auth_user_id"
+
+func newAppState() *appState {
+	return &appState{
+		users: make(map[string]*userState),
+	}
 }
 
-func (s *appState) setOptimizedResume(value string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	v := value
-	s.currentOptimized = &v
+func (s *appState) getOrCreateUserStateLocked(userID string) *userState {
+	state, ok := s.users[userID]
+	if !ok {
+		state = &userState{}
+		s.users[userID] = state
+	}
+	return state
 }
 
-func (s *appState) setCoverLetter(value string) {
+func (s *appState) setBaseResume(userID, value string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	state := s.getOrCreateUserStateLocked(userID)
 	v := value
-	s.currentCoverLetter = &v
+	state.baseResume = &v
+	state.currentOptimized = nil
+	state.currentCoverLetter = nil
 }
 
-func (s *appState) getBaseResume() (string, bool) {
+func (s *appState) setOptimizedResume(userID, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.getOrCreateUserStateLocked(userID)
+	v := value
+	state.currentOptimized = &v
+}
+
+func (s *appState) setCoverLetter(userID, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.getOrCreateUserStateLocked(userID)
+	v := value
+	state.currentCoverLetter = &v
+}
+
+func (s *appState) getBaseResume(userID string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.baseResume == nil {
+	state, ok := s.users[userID]
+	if !ok || state.baseResume == nil {
 		return "", false
 	}
-	return *s.baseResume, true
+	return *state.baseResume, true
 }
 
-func (s *appState) getActiveResume() (string, bool) {
+func (s *appState) getActiveResume(userID string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.currentOptimized != nil {
-		return *s.currentOptimized, true
+	state, ok := s.users[userID]
+	if !ok {
+		return "", false
 	}
-	if s.baseResume != nil {
-		return *s.baseResume, true
+	if state.currentOptimized != nil {
+		return *state.currentOptimized, true
+	}
+	if state.baseResume != nil {
+		return *state.baseResume, true
 	}
 	return "", false
 }
 
-func (s *appState) setJobDescription(value string) {
+func (s *appState) setJobDescription(userID, value string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	state := s.getOrCreateUserStateLocked(userID)
 	v := value
-	s.currentJobDescription = &v
-	s.currentOptimized = nil
-	s.currentCoverLetter = nil
+	state.currentJobDescription = &v
+	state.currentOptimized = nil
+	state.currentCoverLetter = nil
 }
 
-func (s *appState) getJobDescription() (string, bool) {
+func (s *appState) getJobDescription(userID string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.currentJobDescription == nil {
+	state, ok := s.users[userID]
+	if !ok || state.currentJobDescription == nil {
 		return "", false
 	}
-	return *s.currentJobDescription, true
+	return *state.currentJobDescription, true
 }
 
-func (s *appState) getCoverLetter() (string, bool) {
+func (s *appState) getCoverLetter(userID string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.currentCoverLetter == nil {
+	state, ok := s.users[userID]
+	if !ok || state.currentCoverLetter == nil {
 		return "", false
 	}
-	return *s.currentCoverLetter, true
+	return *state.currentCoverLetter, true
 }
 
 type server struct {
-	state           *appState
-	resumeStorePath string
-	authValidator   *auth0Validator
+	state          *appState
+	resumeStoreDir string
+	authValidator  *auth0Validator
 }
 
 type errorResponse struct {
@@ -218,18 +253,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	resumeStorePath := strings.TrimSpace(os.Getenv("RESUME_STORE_PATH"))
-	if resumeStorePath == "" {
-		resumeStorePath = defaultResumePath
-	}
+	resumeStoreDir := resolveResumeStoreDir()
 
 	s := &server{
-		state:           &appState{},
-		resumeStorePath: resumeStorePath,
-		authValidator:   authValidator,
-	}
-	if err := s.loadPersistedBaseResume(); err != nil {
-		log.Printf("Unable to load persisted resume: %v", err)
+		state:          newAppState(),
+		resumeStoreDir: resumeStoreDir,
+		authValidator:  authValidator,
 	}
 
 	mux := http.NewServeMux()
@@ -248,6 +277,20 @@ func main() {
 	if err := http.ListenAndServe(serverAddr, handler); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func resolveResumeStoreDir() string {
+	configured := strings.TrimSpace(os.Getenv("RESUME_STORE_PATH"))
+	if configured == "" {
+		if dirExists("/data") {
+			return "/data/user_resumes"
+		}
+		return defaultResumeStoreDir
+	}
+	if strings.EqualFold(filepath.Ext(configured), ".tex") {
+		return filepath.Join(filepath.Dir(configured), "user_resumes")
+	}
+	return configured
 }
 
 func loadEnvironment() {
@@ -353,8 +396,17 @@ func loadEnvFile(path string) error {
 	return scanner.Err()
 }
 
-func (s *server) loadPersistedBaseResume() error {
-	data, err := os.ReadFile(s.resumeStorePath)
+func (s *server) userResumeFilePath(userID string) string {
+	return filepath.Join(s.resumeStoreDir, userStorageDirName(userID), "base_resume.tex")
+}
+
+func userStorageDirName(userID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(userID)))
+	return fmt.Sprintf("user_%x", sum)
+}
+
+func (s *server) loadPersistedBaseResumeForUser(userID string) error {
+	data, err := os.ReadFile(s.userResumeFilePath(userID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -368,15 +420,39 @@ func (s *server) loadPersistedBaseResume() error {
 	if content == "" {
 		return nil
 	}
-	s.state.setBaseResume(content)
-	log.Printf("Loaded persisted base resume (%d chars)", len(content))
+	s.state.setBaseResume(userID, content)
+	log.Printf("Loaded persisted base resume for user %s (%d chars)", userStorageDirName(userID), len(content))
 	return nil
+}
+
+func (s *server) ensureBaseResumeLoaded(userID string) error {
+	if _, ok := s.state.getBaseResume(userID); ok {
+		return nil
+	}
+	return s.loadPersistedBaseResumeForUser(userID)
+}
+
+func userIDFromContext(ctx context.Context) (string, bool) {
+	value := ctx.Value(authUserIDContextKey)
+	userID, ok := value.(string)
+	if !ok || strings.TrimSpace(userID) == "" {
+		return "", false
+	}
+	return userID, true
+}
+
+func (s *server) requestUserID(r *http.Request) string {
+	if userID, ok := userIDFromContext(r.Context()); ok {
+		return userID
+	}
+	return anonymousUserID
 }
 
 func (s *server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.authValidator == nil {
-			next.ServeHTTP(w, r)
+			ctx := context.WithValue(r.Context(), authUserIDContextKey, anonymousUserID)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
@@ -395,22 +471,29 @@ func (s *server) requireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		if err := s.authValidator.ValidateToken(r.Context(), token); err != nil {
+		claims, err := s.authValidator.ValidateToken(r.Context(), token)
+		if err != nil {
 			log.Printf("auth validation failed: %v", err)
 			writeError(w, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
+		if strings.TrimSpace(claims.Sub) == "" {
+			writeError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
 
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), authUserIDContextKey, claims.Sub)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-func (s *server) persistBaseResume(content string) error {
-	dir := filepath.Dir(s.resumeStorePath)
+func (s *server) persistBaseResume(userID, content string) error {
+	path := s.userResumeFilePath(userID)
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(s.resumeStorePath, []byte(content), 0o600)
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 func (s *server) healthCheck(w http.ResponseWriter, r *http.Request) {
@@ -430,7 +513,13 @@ func (s *server) resumeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resume, ok := s.state.getBaseResume()
+	userID := s.requestUserID(r)
+	if err := s.ensureBaseResumeLoaded(userID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
+		return
+	}
+
+	resume, ok := s.state.getBaseResume(userID)
 	if !ok {
 		writeJSON(w, http.StatusOK, resumeStatusResponse{
 			HasResume: false,
@@ -480,8 +569,9 @@ func (s *server) uploadResume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content := string(data)
-	s.state.setBaseResume(content)
-	if err := s.persistBaseResume(content); err != nil {
+	userID := s.requestUserID(r)
+	s.state.setBaseResume(userID, content)
+	if err := s.persistBaseResume(userID, content); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to persist resume: %v", err))
 		return
 	}
@@ -505,7 +595,8 @@ func (s *server) setJobDescription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.state.setJobDescription(payload.JobDescription)
+	userID := s.requestUserID(r)
+	s.state.setJobDescription(userID, payload.JobDescription)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"message": "Job description saved",
@@ -518,13 +609,19 @@ func (s *server) optimizeResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resume, ok := s.state.getBaseResume()
+	userID := s.requestUserID(r)
+	if err := s.ensureBaseResumeLoaded(userID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
+		return
+	}
+
+	resume, ok := s.state.getBaseResume(userID)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "No base resume found. Please upload a resume first.")
 		return
 	}
 
-	jobDescription, ok := s.state.getJobDescription()
+	jobDescription, ok := s.state.getJobDescription(userID)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "No job description provided. Please set a job description first.")
 		return
@@ -536,7 +633,7 @@ func (s *server) optimizeResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.state.setOptimizedResume(optimizedLatex)
+	s.state.setOptimizedResume(userID, optimizedLatex)
 	writeJSON(w, http.StatusOK, optimizeResponse{
 		OptimizedLatex: optimizedLatex,
 		ChangesSummary: changesSummary,
@@ -549,13 +646,19 @@ func (s *server) generateCoverLetter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resume, ok := s.state.getBaseResume()
+	userID := s.requestUserID(r)
+	if err := s.ensureBaseResumeLoaded(userID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
+		return
+	}
+
+	resume, ok := s.state.getBaseResume(userID)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "No base resume found")
 		return
 	}
 
-	jobDescription, ok := s.state.getJobDescription()
+	jobDescription, ok := s.state.getJobDescription(userID)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "No job description provided")
 		return
@@ -566,7 +669,7 @@ func (s *server) generateCoverLetter(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("LLM error: %v", err))
 		return
 	}
-	s.state.setCoverLetter(coverLetter)
+	s.state.setCoverLetter(userID, coverLetter)
 
 	writeJSON(w, http.StatusOK, coverLetterResponse{
 		CoverLetter:      coverLetter,
@@ -580,13 +683,19 @@ func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	resume, ok := s.state.getBaseResume()
+	userID := s.requestUserID(r)
+	if err := s.ensureBaseResumeLoaded(userID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
+		return
+	}
+
+	resume, ok := s.state.getBaseResume(userID)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "No base resume found. Please upload a resume first.")
 		return
 	}
 
-	jobDescription, ok := s.state.getJobDescription()
+	jobDescription, ok := s.state.getJobDescription(userID)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "No job description provided. Please set a job description first.")
 		return
@@ -604,10 +713,10 @@ func (s *server) generateApplicationPackage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	s.state.setOptimizedResume(optimizedLatex)
-	s.state.setCoverLetter(coverLetterLatex)
+	s.state.setOptimizedResume(userID, optimizedLatex)
+	s.state.setCoverLetter(userID, coverLetterLatex)
 
-	companyName, outputDir, err := prepareCompanyOutputDir(jobDescription)
+	companyName, outputDir, err := prepareCompanyOutputDir(jobDescription, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to prepare output folder: %v", err))
 		return
@@ -682,7 +791,8 @@ func (s *server) generateCoverLetterPDF(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	coverLetterLatex, ok := s.state.getCoverLetter()
+	userID := s.requestUserID(r)
+	coverLetterLatex, ok := s.state.getCoverLetter(userID)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "No generated cover letter found. Generate one first.")
 		return
@@ -694,7 +804,7 @@ func (s *server) generateCoverLetterPDF(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	jobDescription, _ := s.state.getJobDescription()
+	jobDescription, _ := s.state.getJobDescription(userID)
 	companyName := resolveCompanyName(jobDescription)
 	cvFilename := buildCVBaseFilename(companyName) + ".pdf"
 
@@ -710,7 +820,13 @@ func (s *server) generatePDF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resume, ok := s.state.getActiveResume()
+	userID := s.requestUserID(r)
+	if err := s.ensureBaseResumeLoaded(userID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
+		return
+	}
+
+	resume, ok := s.state.getActiveResume(userID)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "No resume to convert")
 		return
@@ -722,8 +838,8 @@ func (s *server) generatePDF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobDescription, _ := s.state.getJobDescription()
-	companyName, outputDir, err := prepareCompanyOutputDir(jobDescription)
+	jobDescription, _ := s.state.getJobDescription(userID)
+	companyName, outputDir, err := prepareCompanyOutputDir(jobDescription, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to prepare output folder: %v", err))
 		return
@@ -793,78 +909,78 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorResponse{Error: message})
 }
 
-func (v *auth0Validator) ValidateToken(ctx context.Context, token string) error {
+func (v *auth0Validator) ValidateToken(ctx context.Context, token string) (*jwtClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return errors.New("invalid jwt format")
+		return nil, errors.New("invalid jwt format")
 	}
 
 	headerBytes, err := decodeBase64URL(parts[0])
 	if err != nil {
-		return fmt.Errorf("invalid jwt header: %w", err)
+		return nil, fmt.Errorf("invalid jwt header: %w", err)
 	}
 
 	var header jwtHeader
 	if err := json.Unmarshal(headerBytes, &header); err != nil {
-		return fmt.Errorf("invalid jwt header json: %w", err)
+		return nil, fmt.Errorf("invalid jwt header json: %w", err)
 	}
 	if !strings.EqualFold(header.Alg, "RS256") {
-		return fmt.Errorf("unsupported jwt alg: %s", header.Alg)
+		return nil, fmt.Errorf("unsupported jwt alg: %s", header.Alg)
 	}
 	if strings.TrimSpace(header.Kid) == "" {
-		return errors.New("jwt missing kid")
+		return nil, errors.New("jwt missing kid")
 	}
 
 	claimsBytes, err := decodeBase64URL(parts[1])
 	if err != nil {
-		return fmt.Errorf("invalid jwt claims: %w", err)
+		return nil, fmt.Errorf("invalid jwt claims: %w", err)
 	}
 
 	var claims jwtClaims
 	if err := json.Unmarshal(claimsBytes, &claims); err != nil {
-		return fmt.Errorf("invalid jwt claims json: %w", err)
+		return nil, fmt.Errorf("invalid jwt claims json: %w", err)
 	}
 
 	signature, err := decodeBase64URL(parts[2])
 	if err != nil {
-		return fmt.Errorf("invalid jwt signature: %w", err)
+		return nil, fmt.Errorf("invalid jwt signature: %w", err)
 	}
 
 	publicKey, err := v.getPublicKey(ctx, header.Kid)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	signingInput := []byte(parts[0] + "." + parts[1])
 	hash := sha256.Sum256(signingInput)
 	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hash[:], signature); err != nil {
-		return fmt.Errorf("jwt signature verification failed: %w", err)
+		return nil, fmt.Errorf("jwt signature verification failed: %w", err)
 	}
 
 	if normalizeIssuer(strings.TrimSpace(claims.Iss)) != normalizeIssuer(v.issuer) {
-		return fmt.Errorf("issuer mismatch")
+		return nil, fmt.Errorf("issuer mismatch")
 	}
 	if !claimHasAudience(claims.Aud, v.audience) {
-		return fmt.Errorf("audience mismatch")
+		return nil, fmt.Errorf("audience mismatch")
 	}
 
 	const clockSkew = int64(60)
 	now := time.Now().Unix()
 
 	if claims.Exp == 0 {
-		return errors.New("jwt missing exp")
+		return nil, errors.New("jwt missing exp")
 	}
 	if now > claims.Exp+clockSkew {
-		return errors.New("token expired")
+		return nil, errors.New("token expired")
 	}
 	if claims.Nbf != 0 && now+clockSkew < claims.Nbf {
-		return errors.New("token not active yet")
+		return nil, errors.New("token not active yet")
 	}
 	if claims.Iat != 0 && claims.Iat > now+clockSkew {
-		return errors.New("token issued in the future")
+		return nil, errors.New("token issued in the future")
 	}
 
-	return nil
+	return &claims, nil
 }
 
 func (v *auth0Validator) getPublicKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
@@ -1060,6 +1176,9 @@ func resolveApplicationsRootDir() (string, error) {
 	if configured := strings.TrimSpace(os.Getenv("APPLICATIONS_ROOT_PATH")); configured != "" {
 		return filepath.Abs(configured)
 	}
+	if dirExists("/data") {
+		return filepath.Abs("/data/applications")
+	}
 
 	projectRoot, err := resolveProjectRootDir()
 	if err != nil {
@@ -1068,16 +1187,17 @@ func resolveApplicationsRootDir() (string, error) {
 	return filepath.Join(projectRoot, defaultApplicationsDirName), nil
 }
 
-func prepareCompanyOutputDir(jobDescription string) (companyName string, outputDir string, err error) {
+func prepareCompanyOutputDir(jobDescription, userID string) (companyName string, outputDir string, err error) {
 	companyName = resolveCompanyName(jobDescription)
 	companyDirName := sanitizeFolderName(companyName)
+	userDirName := userStorageDirName(userID)
 
 	applicationsRootDir, err := resolveApplicationsRootDir()
 	if err != nil {
 		return "", "", err
 	}
 
-	outputDir = filepath.Join(applicationsRootDir, companyDirName)
+	outputDir = filepath.Join(applicationsRootDir, userDirName, companyDirName)
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return "", "", err
 	}
@@ -1123,6 +1243,14 @@ func fileExists(path string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 func removeIfExists(path string) bool {
