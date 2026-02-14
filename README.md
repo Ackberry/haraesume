@@ -57,7 +57,7 @@ flowchart LR
   PDF --> FS["Generated Artifacts\nresume.pdf, cover_letter.pdf"]
 ```
 
-## AI Agent Pipeline (Obsidian Canvas Style)
+## AI Agent Pipeline 
 
 ```mermaid
 flowchart LR
