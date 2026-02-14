@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { useAuth0 } from '@auth0/auth0-react'
 import {
   Alert,
   AlertIcon,
@@ -58,6 +59,19 @@ const STEP_LABELS: Record<Step, string> = {
 }
 
 const isTexFile = (file: File): boolean => file.name.toLowerCase().endsWith('.tex')
+const auth0Audience = import.meta.env.VITE_AUTH0_AUDIENCE?.trim()
+
+const readApiError = async (res: Response): Promise<string> => {
+  try {
+    const err = await res.json() as Partial<ApiError>
+    if (typeof err.error === 'string' && err.error.trim().length > 0) {
+      return err.error
+    }
+  } catch {
+    // Fall through to generic response message.
+  }
+  return `request failed (${res.status})`
+}
 
 const UploadIcon = (props: IconProps) => (
   <Icon viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" {...props}>
@@ -112,6 +126,15 @@ const codeBlock = {
 /* ── Component ─────────────────────────────────────────── */
 
 function App() {
+  const {
+    isAuthenticated,
+    isLoading: isAuthLoading,
+    loginWithRedirect,
+    logout,
+    getAccessTokenSilently,
+    user,
+  } = useAuth0()
+
   const [step, setStep] = useState<Step>('upload')
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [resumeContent, setResumeContent] = useState<string>('')
@@ -125,10 +148,44 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const currentStepIndex = STEPS.indexOf(step)
 
+  const apiFetch = useCallback(async (path: string, init?: RequestInit): Promise<Response> => {
+    const token = await getAccessTokenSilently({
+      authorizationParams: auth0Audience ? { audience: auth0Audience } : undefined,
+    })
+    const headers = new Headers(init?.headers ?? undefined)
+    headers.set('Authorization', `Bearer ${token}`)
+    return fetch(path, { ...init, headers })
+  }, [getAccessTokenSilently])
+
+  const handleSignIn = useCallback(async () => {
+    setError('')
+    await loginWithRedirect({
+      authorizationParams: auth0Audience ? { audience: auth0Audience } : undefined,
+    })
+  }, [loginWithRedirect])
+
+  const handleSignUp = useCallback(async () => {
+    setError('')
+    await loginWithRedirect({
+      authorizationParams: {
+        ...(auth0Audience ? { audience: auth0Audience } : {}),
+        screen_hint: 'signup',
+      },
+    })
+  }, [loginWithRedirect])
+
+  const handleLogout = useCallback(() => {
+    logout({ logoutParams: { returnTo: window.location.origin } })
+  }, [logout])
+
   useEffect(() => {
+    if (!isAuthenticated) {
+      return
+    }
+
     const checkResumeStatus = async () => {
       try {
-        const res = await fetch('/api/resume-status')
+        const res = await apiFetch('/api/resume-status')
         if (!res.ok) return
 
         const data: ResumeStatus = await res.json()
@@ -142,7 +199,7 @@ function App() {
     }
 
     void checkResumeStatus()
-  }, [])
+  }, [apiFetch, isAuthenticated])
 
   const handleFileSelect = useCallback(async (file: File) => {
     if (!isTexFile(file)) {
@@ -161,14 +218,13 @@ function App() {
       const formData = new FormData()
       formData.append('resume', file)
 
-      const res = await fetch('/api/upload-resume', {
+      const res = await apiFetch('/api/upload-resume', {
         method: 'POST',
         body: formData,
       })
 
       if (!res.ok) {
-        const err: ApiError = await res.json()
-        throw new Error(err.error)
+        throw new Error(await readApiError(res))
       }
 
       setHasSavedResume(true)
@@ -178,7 +234,7 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [apiFetch])
 
   const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -220,15 +276,14 @@ function App() {
     setError('')
 
     try {
-      const res = await fetch('/api/job-description', {
+      const res = await apiFetch('/api/job-description', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ job_description: jobDescription }),
       })
 
       if (!res.ok) {
-        const err: ApiError = await res.json()
-        throw new Error(err.error)
+        throw new Error(await readApiError(res))
       }
 
       setStep('optimize')
@@ -244,11 +299,10 @@ function App() {
     setError('')
 
     try {
-      const res = await fetch('/api/optimize', { method: 'POST' })
+      const res = await apiFetch('/api/optimize', { method: 'POST' })
 
       if (!res.ok) {
-        const err: ApiError = await res.json()
-        throw new Error(err.error)
+        throw new Error(await readApiError(res))
       }
 
       await res.json() as Promise<OptimizeApiResponse>
@@ -285,11 +339,10 @@ function App() {
     setError('')
 
     try {
-      const res = await fetch('/api/generate-pdf', { method: 'POST' })
+      const res = await apiFetch('/api/generate-pdf', { method: 'POST' })
 
       if (!res.ok) {
-        const err: ApiError = await res.json()
-        throw new Error(err.error)
+        throw new Error(await readApiError(res))
       }
 
       const data: ResumePdfApiResponse = await res.json()
@@ -308,27 +361,24 @@ function App() {
     setError('')
 
     try {
-      const packageRes = await fetch('/api/generate-application-package', { method: 'POST' })
+      const packageRes = await apiFetch('/api/generate-application-package', { method: 'POST' })
 
       if (!packageRes.ok) {
-        const err: ApiError = await packageRes.json()
-        throw new Error(err.error)
+        throw new Error(await readApiError(packageRes))
       }
 
       const packageData: ApplicationPackageResponse = await packageRes.json()
 
       const [resumeRes, cvRes] = await Promise.all([
-        fetch('/api/generate-pdf', { method: 'POST' }),
-        fetch('/api/generate-cover-letter-pdf', { method: 'POST' }),
+        apiFetch('/api/generate-pdf', { method: 'POST' }),
+        apiFetch('/api/generate-cover-letter-pdf', { method: 'POST' }),
       ])
 
       if (!resumeRes.ok) {
-        const err: ApiError = await resumeRes.json()
-        throw new Error(err.error)
+        throw new Error(await readApiError(resumeRes))
       }
       if (!cvRes.ok) {
-        const err: ApiError = await cvRes.json()
-        throw new Error(err.error)
+        throw new Error(await readApiError(cvRes))
       }
 
       const [resumeData, cvData] = await Promise.all([
@@ -350,10 +400,65 @@ function App() {
     }
   }
 
+  if (isAuthLoading) {
+    return (
+      <Flex minH="100vh" align="center" justify="center" direction="column" gap={4}>
+        <Spinner size="lg" color="ink.900" thickness="3px" />
+        <Text color="ink.700">loading session...</Text>
+      </Flex>
+    )
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <Flex minH="100vh" align="center" justify="center" px={6}>
+        <Stack spacing={6} w="full" maxW="lg" textAlign="center">
+          <Heading size="lg">resume tailoring</Heading>
+          <Text color="ink.700">
+            sign in to access your resume workspace.
+          </Text>
+          {error && (
+            <Alert
+              status="error"
+              bg="transparent"
+              color="ink.900"
+              borderLeft="3px solid"
+              borderColor="red.400"
+              borderRadius={0}
+              w="full"
+              px={4}
+              py={3}
+            >
+              <AlertIcon />
+              {error}
+            </Alert>
+          )}
+          <Flex gap={3} wrap="wrap" justify="center">
+            <Button onClick={() => void handleSignIn()} leftIcon={<CheckIcon boxSize={4} />}>
+              sign in
+            </Button>
+            <Button variant="subtle" onClick={() => void handleSignUp()}>
+              create account
+            </Button>
+          </Flex>
+        </Stack>
+      </Flex>
+    )
+  }
+
   return (
     <Flex minH="100vh" direction="column" align="center">
       <Box as="main" maxW="4xl" w="full" flex="1" px={{ base: 6, md: 14 }} py={{ base: 8, md: 10 }}>
         <Stack spacing={8} w="full" align="center" textAlign="center">
+          <HStack w="full" justify="space-between" align="center" fontSize="sm">
+            <Text color="ink.600" noOfLines={1}>
+              {user?.email ?? user?.name ?? 'signed in'}
+            </Text>
+            <Button size="sm" variant="subtle" onClick={handleLogout}>
+              log out
+            </Button>
+          </HStack>
+
           {/* Title */}
           <Heading size="lg">targeted resume tailoring</Heading>
 

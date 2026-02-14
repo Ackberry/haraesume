@@ -3,12 +3,17 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"crypto"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -112,6 +118,7 @@ func (s *appState) getCoverLetter() (string, bool) {
 type server struct {
 	state           *appState
 	resumeStorePath string
+	authValidator   *auth0Validator
 }
 
 type errorResponse struct {
@@ -164,8 +171,52 @@ type applicationPackageResponse struct {
 	TexFilesDeleted    bool     `json:"tex_files_deleted"`
 }
 
+type auth0Validator struct {
+	issuer   string
+	audience string
+	jwksURL  string
+	client   *http.Client
+	cacheTTL time.Duration
+
+	mu         sync.RWMutex
+	keys       map[string]*rsa.PublicKey
+	lastJWKSAt time.Time
+}
+
+type jwtHeader struct {
+	Alg string `json:"alg"`
+	Kid string `json:"kid"`
+}
+
+type jwtClaims struct {
+	Iss string `json:"iss"`
+	Aud any    `json:"aud"`
+	Sub string `json:"sub"`
+	Exp int64  `json:"exp"`
+	Nbf int64  `json:"nbf,omitempty"`
+	Iat int64  `json:"iat,omitempty"`
+}
+
+type jwksDocument struct {
+	Keys []jwk `json:"keys"`
+}
+
+type jwk struct {
+	Kid string `json:"kid"`
+	Kty string `json:"kty"`
+	Alg string `json:"alg"`
+	Use string `json:"use"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+}
+
 func main() {
 	loadEnvironment()
+
+	authValidator, err := newAuth0ValidatorFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	resumeStorePath := strings.TrimSpace(os.Getenv("RESUME_STORE_PATH"))
 	if resumeStorePath == "" {
@@ -175,6 +226,7 @@ func main() {
 	s := &server{
 		state:           &appState{},
 		resumeStorePath: resumeStorePath,
+		authValidator:   authValidator,
 	}
 	if err := s.loadPersistedBaseResume(); err != nil {
 		log.Printf("Unable to load persisted resume: %v", err)
@@ -182,14 +234,14 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.healthCheck)
-	mux.HandleFunc("/api/resume-status", s.resumeStatus)
-	mux.HandleFunc("/api/upload-resume", s.uploadResume)
-	mux.HandleFunc("/api/job-description", s.setJobDescription)
-	mux.HandleFunc("/api/optimize", s.optimizeResume)
-	mux.HandleFunc("/api/cover-letter", s.generateCoverLetter)
-	mux.HandleFunc("/api/generate-application-package", s.generateApplicationPackage)
-	mux.HandleFunc("/api/generate-cover-letter-pdf", s.generateCoverLetterPDF)
-	mux.HandleFunc("/api/generate-pdf", s.generatePDF)
+	mux.Handle("/api/resume-status", s.requireAuth(http.HandlerFunc(s.resumeStatus)))
+	mux.Handle("/api/upload-resume", s.requireAuth(http.HandlerFunc(s.uploadResume)))
+	mux.Handle("/api/job-description", s.requireAuth(http.HandlerFunc(s.setJobDescription)))
+	mux.Handle("/api/optimize", s.requireAuth(http.HandlerFunc(s.optimizeResume)))
+	mux.Handle("/api/cover-letter", s.requireAuth(http.HandlerFunc(s.generateCoverLetter)))
+	mux.Handle("/api/generate-application-package", s.requireAuth(http.HandlerFunc(s.generateApplicationPackage)))
+	mux.Handle("/api/generate-cover-letter-pdf", s.requireAuth(http.HandlerFunc(s.generateCoverLetterPDF)))
+	mux.Handle("/api/generate-pdf", s.requireAuth(http.HandlerFunc(s.generatePDF)))
 
 	handler := withCORS(mux)
 	log.Printf("Server running on http://localhost:3001")
@@ -208,6 +260,54 @@ func loadEnvironment() {
 			log.Printf("Skipping %s: %v", path, err)
 		}
 	}
+}
+
+func newAuth0ValidatorFromEnv() (*auth0Validator, error) {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("AUTH_PROVIDER")))
+	if provider == "" {
+		return nil, nil
+	}
+	if provider != "auth0" {
+		return nil, fmt.Errorf("unsupported AUTH_PROVIDER: %s", provider)
+	}
+
+	domain := normalizeAuth0Domain(os.Getenv("AUTH0_DOMAIN"))
+	issuer := strings.TrimSpace(os.Getenv("AUTH0_ISSUER_BASE_URL"))
+	audience := strings.TrimSpace(os.Getenv("AUTH0_AUDIENCE"))
+
+	if domain == "" {
+		return nil, errors.New("AUTH0_DOMAIN is required when AUTH_PROVIDER=auth0")
+	}
+	if audience == "" {
+		return nil, errors.New("AUTH0_AUDIENCE is required when AUTH_PROVIDER=auth0")
+	}
+	if issuer == "" {
+		issuer = "https://" + domain
+	}
+	if !strings.HasPrefix(issuer, "http://") && !strings.HasPrefix(issuer, "https://") {
+		issuer = "https://" + issuer
+	}
+	issuer = strings.TrimRight(issuer, "/")
+
+	jwksURL := issuer + "/.well-known/jwks.json"
+	return &auth0Validator{
+		issuer:   issuer,
+		audience: audience,
+		jwksURL:  jwksURL,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+		cacheTTL: 10 * time.Minute,
+		keys:     make(map[string]*rsa.PublicKey),
+	}, nil
+}
+
+func normalizeAuth0Domain(raw string) string {
+	domain := strings.TrimSpace(raw)
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.TrimPrefix(domain, "http://")
+	domain = strings.TrimRight(domain, "/")
+	return domain
 }
 
 func loadEnvFile(path string) error {
@@ -271,6 +371,38 @@ func (s *server) loadPersistedBaseResume() error {
 	s.state.setBaseResume(content)
 	log.Printf("Loaded persisted base resume (%d chars)", len(content))
 	return nil
+}
+
+func (s *server) requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.authValidator == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+		if authHeader == "" {
+			writeError(w, http.StatusUnauthorized, "Missing Authorization header")
+			return
+		}
+		if !strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+			writeError(w, http.StatusUnauthorized, "Authorization header must be Bearer token")
+			return
+		}
+		token := strings.TrimSpace(authHeader[len("Bearer "):])
+		if token == "" {
+			writeError(w, http.StatusUnauthorized, "Missing bearer token")
+			return
+		}
+
+		if err := s.authValidator.ValidateToken(r.Context(), token); err != nil {
+			log.Printf("auth validation failed: %v", err)
+			writeError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *server) persistBaseResume(content string) error {
@@ -659,6 +791,198 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorResponse{Error: message})
+}
+
+func (v *auth0Validator) ValidateToken(ctx context.Context, token string) error {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return errors.New("invalid jwt format")
+	}
+
+	headerBytes, err := decodeBase64URL(parts[0])
+	if err != nil {
+		return fmt.Errorf("invalid jwt header: %w", err)
+	}
+
+	var header jwtHeader
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return fmt.Errorf("invalid jwt header json: %w", err)
+	}
+	if !strings.EqualFold(header.Alg, "RS256") {
+		return fmt.Errorf("unsupported jwt alg: %s", header.Alg)
+	}
+	if strings.TrimSpace(header.Kid) == "" {
+		return errors.New("jwt missing kid")
+	}
+
+	claimsBytes, err := decodeBase64URL(parts[1])
+	if err != nil {
+		return fmt.Errorf("invalid jwt claims: %w", err)
+	}
+
+	var claims jwtClaims
+	if err := json.Unmarshal(claimsBytes, &claims); err != nil {
+		return fmt.Errorf("invalid jwt claims json: %w", err)
+	}
+
+	signature, err := decodeBase64URL(parts[2])
+	if err != nil {
+		return fmt.Errorf("invalid jwt signature: %w", err)
+	}
+
+	publicKey, err := v.getPublicKey(ctx, header.Kid)
+	if err != nil {
+		return err
+	}
+
+	signingInput := []byte(parts[0] + "." + parts[1])
+	hash := sha256.Sum256(signingInput)
+	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hash[:], signature); err != nil {
+		return fmt.Errorf("jwt signature verification failed: %w", err)
+	}
+
+	if strings.TrimSpace(claims.Iss) != v.issuer {
+		return fmt.Errorf("issuer mismatch")
+	}
+	if !claimHasAudience(claims.Aud, v.audience) {
+		return fmt.Errorf("audience mismatch")
+	}
+
+	const clockSkew = int64(60)
+	now := time.Now().Unix()
+
+	if claims.Exp == 0 {
+		return errors.New("jwt missing exp")
+	}
+	if now > claims.Exp+clockSkew {
+		return errors.New("token expired")
+	}
+	if claims.Nbf != 0 && now+clockSkew < claims.Nbf {
+		return errors.New("token not active yet")
+	}
+	if claims.Iat != 0 && claims.Iat > now+clockSkew {
+		return errors.New("token issued in the future")
+	}
+
+	return nil
+}
+
+func (v *auth0Validator) getPublicKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+	v.mu.RLock()
+	key, ok := v.keys[kid]
+	isFresh := time.Since(v.lastJWKSAt) < v.cacheTTL
+	v.mu.RUnlock()
+	if ok && isFresh {
+		return key, nil
+	}
+
+	if err := v.refreshJWKs(ctx); err != nil {
+		if ok {
+			return key, nil
+		}
+		return nil, err
+	}
+
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	updated, found := v.keys[kid]
+	if !found {
+		return nil, fmt.Errorf("jwks key %s not found", kid)
+	}
+	return updated, nil
+}
+
+func (v *auth0Validator) refreshJWKs(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("jwks request failed: %s", resp.Status)
+	}
+
+	var doc jwksDocument
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return err
+	}
+	if len(doc.Keys) == 0 {
+		return errors.New("jwks response contained no keys")
+	}
+
+	next := make(map[string]*rsa.PublicKey, len(doc.Keys))
+	for _, key := range doc.Keys {
+		if key.Kid == "" || key.Kty != "RSA" || key.N == "" || key.E == "" {
+			continue
+		}
+		pub, err := parseRSAPublicKeyFromJWK(key.N, key.E)
+		if err != nil {
+			continue
+		}
+		next[key.Kid] = pub
+	}
+	if len(next) == 0 {
+		return errors.New("jwks had no usable rsa keys")
+	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.keys = next
+	v.lastJWKSAt = time.Now()
+	return nil
+}
+
+func parseRSAPublicKeyFromJWK(nB64, eB64 string) (*rsa.PublicKey, error) {
+	nBytes, err := decodeBase64URL(nB64)
+	if err != nil {
+		return nil, err
+	}
+	eBytes, err := decodeBase64URL(eB64)
+	if err != nil {
+		return nil, err
+	}
+	if len(eBytes) == 0 {
+		return nil, errors.New("empty rsa exponent")
+	}
+
+	exponent := 0
+	for _, b := range eBytes {
+		exponent = (exponent << 8) + int(b)
+	}
+	if exponent <= 0 {
+		return nil, errors.New("invalid rsa exponent")
+	}
+
+	modulus := new(big.Int).SetBytes(nBytes)
+	if modulus.Sign() <= 0 {
+		return nil, errors.New("invalid rsa modulus")
+	}
+
+	return &rsa.PublicKey{N: modulus, E: exponent}, nil
+}
+
+func decodeBase64URL(input string) ([]byte, error) {
+	return base64.RawURLEncoding.DecodeString(input)
+}
+
+func claimHasAudience(rawAud any, expected string) bool {
+	switch aud := rawAud.(type) {
+	case string:
+		return aud == expected
+	case []any:
+		for _, item := range aud {
+			if str, ok := item.(string); ok && str == expected {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func extractCompanyNameWithAgent(jobDescription string) (string, error) {

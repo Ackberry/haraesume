@@ -92,6 +92,9 @@ flowchart LR
 - Node.js (20+)
 - TeX Live (for `pdflatex`)
 - OpenRouter API key
+- Auth0 tenant with:
+  - One SPA application (for frontend login)
+  - One custom API (for audience/access tokens)
 
 ## Quick Start
 
@@ -107,6 +110,10 @@ cd haraesume
 ```bash
 cd backend
 export OPENROUTER_API_KEY="your-openrouter-api-key"
+export AUTH_PROVIDER="auth0"
+export AUTH0_DOMAIN="your-tenant.us.auth0.com"
+export AUTH0_ISSUER_BASE_URL="https://your-tenant.us.auth0.com"
+export AUTH0_AUDIENCE="https://api.haraesume.com"
 go run .
 # Server: http://localhost:3001
 ```
@@ -116,6 +123,10 @@ go run .
 ```bash
 cd frontend
 npm install
+export VITE_AUTH0_DOMAIN="your-tenant.us.auth0.com"
+export VITE_AUTH0_CLIENT_ID="your-auth0-spa-client-id"
+export VITE_AUTH0_AUDIENCE="https://api.haraesume.com"
+export VITE_AUTH0_REDIRECT_URI="http://localhost:5173"
 npm run dev
 # App: http://localhost:5173
 ```
@@ -123,10 +134,11 @@ npm run dev
 ### 4. Use the App
 
 1. Open http://localhost:5173
-2. Upload a `.tex` resume (use `sample_resume.tex` to test)
-3. Paste the job description
-4. Click **Optimize Resume**
-5. Download PDF or generate a cover letter
+2. Sign in (or create account) via Auth0
+3. Upload a `.tex` resume (use `sample_resume.tex` to test)
+4. Paste the job description
+5. Click **Optimize Resume**
+6. Download PDF or generate a cover letter
 
 After the first upload, the backend persists your base resume. On later sessions, you can go straight to the job description step.
 
@@ -150,14 +162,29 @@ After the first upload, the backend persists your base resume. On later sessions
 |----------|-------------|
 | `OPENROUTER_API_KEY` | Your OpenRouter API key |
 | `OPENROUTER_MODEL` | Optional model override for backend/agents |
+| `AUTH_PROVIDER` | Set to `auth0` to enforce Auth0 JWT auth on `/api/*` routes |
+| `AUTH0_DOMAIN` | Auth0 tenant domain (example: `your-tenant.us.auth0.com`) |
+| `AUTH0_ISSUER_BASE_URL` | Auth0 issuer URL (example: `https://your-tenant.us.auth0.com`) |
+| `AUTH0_AUDIENCE` | Auth0 API Identifier used as JWT audience |
+| `AUTH0_CLIENT_ID` | Optional backend M2M use; not required for frontend user auth |
+| `AUTH0_CLIENT_SECRET` | Optional backend M2M use; keep secret server-side only |
 | `RESUME_STORE_PATH` | Optional path for persisted base resume (default: `state/base_resume.tex`) |
 | `APPLICATIONS_ROOT_PATH` | Optional absolute/relative override for output root (default: `<repo>/applications`) |
-| `VITE_*` | Frontend variables (must use `VITE_` prefix) |
+| `VITE_AUTH0_DOMAIN` | Auth0 tenant domain for frontend |
+| `VITE_AUTH0_CLIENT_ID` | Auth0 SPA application client ID |
+| `VITE_AUTH0_AUDIENCE` | Audience/Identifier for your custom Auth0 API |
+| `VITE_AUTH0_REDIRECT_URI` | Frontend callback URL after Auth0 login |
 
 You can keep a single root `.env` at `haraesume/.env`.
 
 - Frontend reads root env via `frontend/vite.config.ts` (`envDir: '..'`)
 - Backend auto-loads `.env` from either `backend/.env` or root `../.env`
+
+Auth0 app settings should include:
+
+- Allowed Callback URLs: `http://localhost:5173`
+- Allowed Logout URLs: `http://localhost:5173`
+- Allowed Web Origins: `http://localhost:5173`
 
 Resume upload is `.tex` only. PDF is generated as output via `/api/generate-pdf`.
 
