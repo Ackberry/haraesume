@@ -7,9 +7,12 @@ export default defineConfig({
   envDir: '..',
   plugins: [react(), tailwindcss()],
   server: {
+    host: true,          // binds to 0.0.0.0
+    port: 5173,
+    strictPort: true,
     proxy: {
-      '/api': 'http://localhost:3001',
-      '/health': 'http://localhost:3001',
-    }
-  }
+      '/api': { target: 'http://backend:3001', changeOrigin: true },
+      '/health': { target: 'http://backend:3001', changeOrigin: true },
+    },
+  },
 })
