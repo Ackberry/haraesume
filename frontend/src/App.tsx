@@ -156,6 +156,7 @@ function App() {
   const [dragOver, setDragOver] = useState<boolean>(false)
   const [hasSavedResume, setHasSavedResume] = useState<boolean>(false)
   const [selectedDownloadOption, setSelectedDownloadOption] = useState<DownloadOption | null>(null)
+  const [changesSummary, setChangesSummary] = useState<string[]>([])
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const currentStepIndex = STEPS.indexOf(step)
@@ -370,7 +371,14 @@ function App() {
         throw new Error(await readApiError(res))
       }
 
-      await res.json() as Promise<OptimizeApiResponse>
+      const data: OptimizeApiResponse = await res.json()
+
+      const bullets = (data.changes_summary ?? '')
+        .split('\n')
+        .map((line) => line.replace(/^[-•*]\s*/, '').trim())
+        .filter(Boolean)
+      setChangesSummary(bullets)
+
       setSelectedDownloadOption(null)
       setStep('result')
     } catch (e) {
@@ -827,6 +835,20 @@ function App() {
                 <Heading size="md" mb={2}>optimized result</Heading>
                 <Text color="ink.700">choose one download option.</Text>
               </Box>
+
+              {changesSummary.length > 0 && (
+                <Box w="full" maxW="560px" textAlign="left">
+                  <Text fontWeight="semibold" mb={3} color="ink.800">changes made</Text>
+                  <List spacing={2} color="ink.700" fontSize="sm">
+                    {changesSummary.map((change, i) => (
+                      <ListItem key={i}>
+                        <ListIcon as={CheckIcon} color="ink.600" />
+                        {change}
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )}
 
               <Stack spacing={3} w="full" maxW="460px">
                 {(['resume', 'resume_cv'] as DownloadOption[]).map((option) => {
