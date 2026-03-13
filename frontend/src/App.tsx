@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth'
-import { auth, googleProvider } from './firebase'
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'
+import { auth, googleProvider, db } from './firebase'
 import {
   Alert,
   AlertIcon,
@@ -10,6 +11,7 @@ import {
   Heading,
   HStack,
   Icon,
+  Input,
   List,
   ListIcon,
   ListItem,
@@ -130,6 +132,9 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true)
   const [waitlistStatus, setWaitlistStatus] = useState<'pending' | 'invited' | 'approved' | null>(null)
   const [waitlistChecked, setWaitlistChecked] = useState(false)
+  const [waitlistEmail, setWaitlistEmail] = useState('')
+  const [waitlistSubmitted, setWaitlistSubmitted] = useState(false)
+  const [waitlistSubmitting, setWaitlistSubmitting] = useState(false)
 
   useEffect(() => {
     return onAuthStateChanged(auth, (u) => {
@@ -168,27 +173,75 @@ function App() {
     void signOut(auth)
   }, [])
 
+  const handleJoinWaitlist = useCallback(async () => {
+    const email = waitlistEmail.trim().toLowerCase()
+    if (!email || !email.includes('@')) {
+      setError('please enter a valid email address')
+      return
+    }
+
+    setWaitlistSubmitting(true)
+    setError('')
+
+    try {
+      const docRef = doc(db, 'waitlist', email)
+      const existing = await getDoc(docRef)
+      if (!existing.exists()) {
+        await setDoc(docRef, {
+          email,
+          status: 'pending',
+          created_at: serverTimestamp(),
+        })
+
+        fetch('/api/waitlist/notify-signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        }).catch(() => {})
+      }
+      setWaitlistSubmitted(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'failed to join waitlist')
+    } finally {
+      setWaitlistSubmitting(false)
+    }
+  }, [waitlistEmail])
+
   useEffect(() => {
     if (!firebaseUser) {
       return
     }
 
-    const checkWaitlist = async () => {
+    const checkApproval = async () => {
       try {
-        const res = await apiFetch('/api/waitlist-status')
-        if (!res.ok) return
+        const email = (firebaseUser.email ?? '').toLowerCase()
+        if (!email) {
+          setWaitlistChecked(true)
+          return
+        }
 
-        const data = await res.json() as { status: 'pending' | 'invited' | 'approved' }
-        setWaitlistStatus(data.status)
+        const docRef = doc(db, 'waitlist', email)
+        const snap = await getDoc(docRef)
+
+        if (snap.exists()) {
+          setWaitlistStatus(snap.data().status as 'pending' | 'invited' | 'approved')
+        } else {
+          await setDoc(docRef, {
+            email,
+            status: 'pending',
+            created_at: serverTimestamp(),
+          })
+          setWaitlistStatus('pending')
+        }
       } catch {
-        // Remain unchecked.
+        // If Firestore fails, don't block completely.
       } finally {
         setWaitlistChecked(true)
       }
     }
 
-    void checkWaitlist()
-  }, [apiFetch, firebaseUser])
+    void checkApproval()
+  }, [firebaseUser])
 
   useEffect(() => {
     if (!firebaseUser || waitlistStatus !== 'approved') {
@@ -426,9 +479,7 @@ function App() {
       <Flex minH="100vh" align="center" justify="center" px={6}>
         <Stack spacing={6} w="full" maxW="lg" align="center" textAlign="center">
           <Heading size="lg">resume tailoring</Heading>
-          <Text color="ink.700">
-            sign in to access your resume workspace.
-          </Text>
+
           {error && (
             <Alert
               status="error"
@@ -445,16 +496,60 @@ function App() {
               {error}
             </Alert>
           )}
-          <Button
-            onClick={() => {
-              setError('')
-              signInWithPopup(auth, googleProvider).catch((err) => {
-                setError(err instanceof Error ? err.message : 'sign in failed')
-              })
-            }}
-          >
-            sign in with Google
-          </Button>
+
+          {waitlistSubmitted ? (
+            <Stack spacing={4} align="center">
+              <Text color="ink.700">
+                thanks! you've been added to the waitlist. we'll let you know when your account is ready.
+              </Text>
+              <Text color="ink.500" fontSize="sm">
+                already approved? sign in below.
+              </Text>
+            </Stack>
+          ) : (
+            <Stack spacing={4} w="full" align="center">
+              <Text color="ink.700">
+                enter your email to join the waitlist.
+              </Text>
+              <HStack w="full" maxW="sm">
+                <Input
+                  placeholder="your@email.com"
+                  value={waitlistEmail}
+                  onChange={(e) => setWaitlistEmail(e.target.value)}
+                  type="email"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void handleJoinWaitlist()
+                  }}
+                />
+                <Button
+                  onClick={() => void handleJoinWaitlist()}
+                  isDisabled={waitlistSubmitting}
+                  flexShrink={0}
+                >
+                  {waitlistSubmitting ? <Spinner size="sm" /> : 'join'}
+                </Button>
+              </HStack>
+            </Stack>
+          )}
+
+          <Box w="full" maxW="sm" borderTop="1px solid" borderColor="ink.200" />
+
+          <Stack spacing={2} align="center">
+            <Text color="ink.500" fontSize="sm">
+              already have access?
+            </Text>
+            <Button
+              variant="subtle"
+              onClick={() => {
+                setError('')
+                signInWithPopup(auth, googleProvider).catch((err) => {
+                  setError(err instanceof Error ? err.message : 'sign in failed')
+                })
+              }}
+            >
+              sign in with Google
+            </Button>
+          </Stack>
         </Stack>
       </Flex>
     )
