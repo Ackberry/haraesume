@@ -51,7 +51,10 @@ type userState struct {
 
 type contextKey string
 
-const authUserIDContextKey contextKey = "auth_user_id"
+const (
+	authUserIDContextKey    contextKey = "auth_user_id"
+	authUserEmailContextKey contextKey = "auth_user_email"
+)
 
 func newAppState() *appState {
 	return &appState{
@@ -150,10 +153,179 @@ func (s *appState) getCoverLetter(userID string) (string, bool) {
 	return *state.currentCoverLetter, true
 }
 
+type waitlistStatus string
+
+const (
+	waitlistPending  waitlistStatus = "pending"
+	waitlistInvited  waitlistStatus = "invited"
+	waitlistApproved waitlistStatus = "approved"
+)
+
+type waitlistEntry struct {
+	Email     string         `json:"email"`
+	Status    waitlistStatus `json:"status"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+type waitlistStore struct {
+	mu       sync.RWMutex
+	entries  map[string]*waitlistEntry
+	filePath string
+}
+
+func newWaitlistStore(filePath string) (*waitlistStore, error) {
+	store := &waitlistStore{
+		entries:  make(map[string]*waitlistEntry),
+		filePath: filePath,
+	}
+	if err := store.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("failed to load waitlist: %w", err)
+	}
+	return store, nil
+}
+
+func (ws *waitlistStore) load() error {
+	data, err := os.ReadFile(ws.filePath)
+	if err != nil {
+		return err
+	}
+	var entries map[string]*waitlistEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return fmt.Errorf("invalid waitlist data: %w", err)
+	}
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	ws.entries = entries
+	return nil
+}
+
+func (ws *waitlistStore) persist() error {
+	ws.mu.RLock()
+	data, err := json.MarshalIndent(ws.entries, "", "  ")
+	ws.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(ws.filePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(ws.filePath, data, 0o600)
+}
+
+func (ws *waitlistStore) getEntry(userID string) (*waitlistEntry, bool) {
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+	entry, ok := ws.entries[userID]
+	if !ok {
+		return nil, false
+	}
+	copied := *entry
+	return &copied, true
+}
+
+func (ws *waitlistStore) registerOrGet(userID, email string) (*waitlistEntry, error) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	if entry, ok := ws.entries[userID]; ok {
+		copied := *entry
+		return &copied, nil
+	}
+
+	now := time.Now().UTC()
+	entry := &waitlistEntry{
+		Email:     email,
+		Status:    waitlistPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	ws.entries[userID] = entry
+
+	data, err := json.MarshalIndent(ws.entries, "", "  ")
+	if err != nil {
+		delete(ws.entries, userID)
+		return nil, err
+	}
+	dir := filepath.Dir(ws.filePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		delete(ws.entries, userID)
+		return nil, err
+	}
+	if err := os.WriteFile(ws.filePath, data, 0o600); err != nil {
+		delete(ws.entries, userID)
+		return nil, err
+	}
+
+	copied := *entry
+	return &copied, nil
+}
+
+func (ws *waitlistStore) updateStatus(userID string, newStatus waitlistStatus) error {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	entry, ok := ws.entries[userID]
+	if !ok {
+		return fmt.Errorf("user %s not found in waitlist", userID)
+	}
+
+	entry.Status = newStatus
+	entry.UpdatedAt = time.Now().UTC()
+
+	data, err := json.MarshalIndent(ws.entries, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(ws.filePath, data, 0o600)
+}
+
+func (ws *waitlistStore) listAll() map[string]*waitlistEntry {
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+	result := make(map[string]*waitlistEntry, len(ws.entries))
+	for k, v := range ws.entries {
+		copied := *v
+		result[k] = &copied
+	}
+	return result
+}
+
+func resolveWaitlistFilePath() string {
+	if dirExists("/data") {
+		return "/data/waitlist.json"
+	}
+	return filepath.Join("state", "waitlist.json")
+}
+
+func isAdminUID(userID string) bool {
+	adminUIDs := strings.TrimSpace(os.Getenv("ADMIN_UIDS"))
+	if adminUIDs == "" {
+		return false
+	}
+	for _, uid := range strings.Split(adminUIDs, ",") {
+		if strings.TrimSpace(uid) == userID {
+			return true
+		}
+	}
+	return false
+}
+
+func userEmailFromContext(ctx context.Context) string {
+	value := ctx.Value(authUserEmailContextKey)
+	email, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return email
+}
+
 type server struct {
 	state          *appState
 	resumeStoreDir string
-	authValidator  *auth0Validator
+	authValidator  *firebaseValidator
+	waitlist       *waitlistStore
 }
 
 type errorResponse struct {
@@ -206,7 +378,7 @@ type applicationPackageResponse struct {
 	TexFilesDeleted    bool     `json:"tex_files_deleted"`
 }
 
-type auth0Validator struct {
+type firebaseValidator struct {
 	issuer   string
 	audience string
 	jwksURL  string
@@ -224,12 +396,13 @@ type jwtHeader struct {
 }
 
 type jwtClaims struct {
-	Iss string `json:"iss"`
-	Aud any    `json:"aud"`
-	Sub string `json:"sub"`
-	Exp int64  `json:"exp"`
-	Nbf int64  `json:"nbf,omitempty"`
-	Iat int64  `json:"iat,omitempty"`
+	Iss   string `json:"iss"`
+	Aud   any    `json:"aud"`
+	Sub   string `json:"sub"`
+	Email string `json:"email"`
+	Exp   int64  `json:"exp"`
+	Nbf   int64  `json:"nbf,omitempty"`
+	Iat   int64  `json:"iat,omitempty"`
 }
 
 type jwksDocument struct {
@@ -248,29 +421,42 @@ type jwk struct {
 func main() {
 	loadEnvironment()
 
-	authValidator, err := newAuth0ValidatorFromEnv()
+	authValidator, err := newFirebaseValidatorFromEnv()
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	resumeStoreDir := resolveResumeStoreDir()
 
+	waitlistPath := resolveWaitlistFilePath()
+	waitlist, wlErr := newWaitlistStore(waitlistPath)
+	if wlErr != nil {
+		log.Fatal(wlErr)
+	}
+	log.Printf("Waitlist store loaded from %s (%d entries)", waitlistPath, len(waitlist.entries))
+
 	s := &server{
 		state:          newAppState(),
 		resumeStoreDir: resumeStoreDir,
 		authValidator:  authValidator,
+		waitlist:       waitlist,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.healthCheck)
-	mux.Handle("/api/resume-status", s.requireAuth(http.HandlerFunc(s.resumeStatus)))
-	mux.Handle("/api/upload-resume", s.requireAuth(http.HandlerFunc(s.uploadResume)))
-	mux.Handle("/api/job-description", s.requireAuth(http.HandlerFunc(s.setJobDescription)))
-	mux.Handle("/api/optimize", s.requireAuth(http.HandlerFunc(s.optimizeResume)))
-	mux.Handle("/api/cover-letter", s.requireAuth(http.HandlerFunc(s.generateCoverLetter)))
-	mux.Handle("/api/generate-application-package", s.requireAuth(http.HandlerFunc(s.generateApplicationPackage)))
-	mux.Handle("/api/generate-cover-letter-pdf", s.requireAuth(http.HandlerFunc(s.generateCoverLetterPDF)))
-	mux.Handle("/api/generate-pdf", s.requireAuth(http.HandlerFunc(s.generatePDF)))
+
+	mux.Handle("/api/waitlist-status", s.requireAuth(http.HandlerFunc(s.waitlistStatusHandler)))
+	mux.Handle("/api/admin/waitlist", s.requireAuth(http.HandlerFunc(s.adminListWaitlist)))
+	mux.Handle("/api/admin/waitlist/update", s.requireAuth(http.HandlerFunc(s.adminUpdateWaitlist)))
+
+	mux.Handle("/api/resume-status", s.requireApproved(http.HandlerFunc(s.resumeStatus)))
+	mux.Handle("/api/upload-resume", s.requireApproved(http.HandlerFunc(s.uploadResume)))
+	mux.Handle("/api/job-description", s.requireApproved(http.HandlerFunc(s.setJobDescription)))
+	mux.Handle("/api/optimize", s.requireApproved(http.HandlerFunc(s.optimizeResume)))
+	mux.Handle("/api/cover-letter", s.requireApproved(http.HandlerFunc(s.generateCoverLetter)))
+	mux.Handle("/api/generate-application-package", s.requireApproved(http.HandlerFunc(s.generateApplicationPackage)))
+	mux.Handle("/api/generate-cover-letter-pdf", s.requireApproved(http.HandlerFunc(s.generateCoverLetterPDF)))
+	mux.Handle("/api/generate-pdf", s.requireApproved(http.HandlerFunc(s.generatePDF)))
 
 	handler := withCORS(mux)
 	log.Printf("Server running on http://localhost:3001")
@@ -305,52 +491,32 @@ func loadEnvironment() {
 	}
 }
 
-func newAuth0ValidatorFromEnv() (*auth0Validator, error) {
+func newFirebaseValidatorFromEnv() (*firebaseValidator, error) {
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("AUTH_PROVIDER")))
 	if provider == "" {
 		return nil, nil
 	}
-	if provider != "auth0" {
+	if provider != "firebase" {
 		return nil, fmt.Errorf("unsupported AUTH_PROVIDER: %s", provider)
 	}
 
-	domain := normalizeAuth0Domain(os.Getenv("AUTH0_DOMAIN"))
-	issuer := strings.TrimSpace(os.Getenv("AUTH0_ISSUER_BASE_URL"))
-	audience := strings.TrimSpace(os.Getenv("AUTH0_AUDIENCE"))
+	projectID := strings.TrimSpace(os.Getenv("FIREBASE_PROJECT_ID"))
+	if projectID == "" {
+		return nil, errors.New("FIREBASE_PROJECT_ID is required when AUTH_PROVIDER=firebase")
+	}
 
-	if domain == "" {
-		return nil, errors.New("AUTH0_DOMAIN is required when AUTH_PROVIDER=auth0")
-	}
-	if audience == "" {
-		return nil, errors.New("AUTH0_AUDIENCE is required when AUTH_PROVIDER=auth0")
-	}
-	if issuer == "" {
-		issuer = "https://" + domain
-	}
-	if !strings.HasPrefix(issuer, "http://") && !strings.HasPrefix(issuer, "https://") {
-		issuer = "https://" + issuer
-	}
-	issuer = strings.TrimRight(issuer, "/")
+	issuer := "https://securetoken.google.com/" + projectID
 
-	jwksURL := issuer + "/.well-known/jwks.json"
-	return &auth0Validator{
+	return &firebaseValidator{
 		issuer:   issuer,
-		audience: audience,
-		jwksURL:  jwksURL,
+		audience: projectID,
+		jwksURL:  "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com",
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
 		cacheTTL: 10 * time.Minute,
 		keys:     make(map[string]*rsa.PublicKey),
 	}, nil
-}
-
-func normalizeAuth0Domain(raw string) string {
-	domain := strings.TrimSpace(raw)
-	domain = strings.TrimPrefix(domain, "https://")
-	domain = strings.TrimPrefix(domain, "http://")
-	domain = strings.TrimRight(domain, "/")
-	return domain
 }
 
 func loadEnvFile(path string) error {
@@ -483,7 +649,133 @@ func (s *server) requireAuth(next http.Handler) http.Handler {
 		}
 
 		ctx := context.WithValue(r.Context(), authUserIDContextKey, claims.Sub)
+		ctx = context.WithValue(ctx, authUserEmailContextKey, claims.Email)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *server) requireApproved(next http.Handler) http.Handler {
+	return s.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := userIDFromContext(r.Context())
+		if !ok || userID == anonymousUserID {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		entry, exists := s.waitlist.getEntry(userID)
+		if !exists || entry.Status != waitlistApproved {
+			writeError(w, http.StatusForbidden, "Your account is not yet approved. Please wait for access.")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	}))
+}
+
+func (s *server) waitlistStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	userID := s.requestUserID(r)
+	email := userEmailFromContext(r.Context())
+
+	entry, err := s.waitlist.registerOrGet(userID, email)
+	if err != nil {
+		log.Printf("waitlist registerOrGet failed for %s: %v", userID, err)
+		writeError(w, http.StatusInternalServerError, "Failed to check waitlist status")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     entry.Status,
+		"created_at": entry.CreatedAt,
+	})
+}
+
+func (s *server) adminListWaitlist(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	userID := s.requestUserID(r)
+	if !isAdminUID(userID) {
+		writeError(w, http.StatusForbidden, "Admin access required")
+		return
+	}
+
+	entries := s.waitlist.listAll()
+
+	type waitlistUserResponse struct {
+		UserID    string         `json:"user_id"`
+		Email     string         `json:"email"`
+		Status    waitlistStatus `json:"status"`
+		CreatedAt time.Time      `json:"created_at"`
+		UpdatedAt time.Time      `json:"updated_at"`
+	}
+
+	users := make([]waitlistUserResponse, 0, len(entries))
+	for uid, entry := range entries {
+		users = append(users, waitlistUserResponse{
+			UserID:    uid,
+			Email:     entry.Email,
+			Status:    entry.Status,
+			CreatedAt: entry.CreatedAt,
+			UpdatedAt: entry.UpdatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"users": users,
+	})
+}
+
+type adminWaitlistUpdateRequest struct {
+	UserID string         `json:"user_id"`
+	Status waitlistStatus `json:"status"`
+}
+
+func (s *server) adminUpdateWaitlist(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	userID := s.requestUserID(r)
+	if !isAdminUID(userID) {
+		writeError(w, http.StatusForbidden, "Admin access required")
+		return
+	}
+
+	var payload adminWaitlistUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if payload.UserID == "" {
+		writeError(w, http.StatusBadRequest, "user_id is required")
+		return
+	}
+
+	switch payload.Status {
+	case waitlistPending, waitlistInvited, waitlistApproved:
+	default:
+		writeError(w, http.StatusBadRequest, "status must be one of: pending, invited, approved")
+		return
+	}
+
+	if err := s.waitlist.updateStatus(payload.UserID, payload.Status); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	log.Printf("Admin %s updated user %s to %s", userID, payload.UserID, payload.Status)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"message": fmt.Sprintf("User status updated to %s", payload.Status),
 	})
 }
 
@@ -909,7 +1201,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorResponse{Error: message})
 }
 
-func (v *auth0Validator) ValidateToken(ctx context.Context, token string) (*jwtClaims, error) {
+func (v *firebaseValidator) ValidateToken(ctx context.Context, token string) (*jwtClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("invalid jwt format")
@@ -983,7 +1275,7 @@ func (v *auth0Validator) ValidateToken(ctx context.Context, token string) (*jwtC
 	return &claims, nil
 }
 
-func (v *auth0Validator) getPublicKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+func (v *firebaseValidator) getPublicKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	v.mu.RLock()
 	key, ok := v.keys[kid]
 	isFresh := time.Since(v.lastJWKSAt) < v.cacheTTL
@@ -1008,7 +1300,7 @@ func (v *auth0Validator) getPublicKey(ctx context.Context, kid string) (*rsa.Pub
 	return updated, nil
 }
 
-func (v *auth0Validator) refreshJWKs(ctx context.Context) error {
+func (v *firebaseValidator) refreshJWKs(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
 	if err != nil {
 		return err

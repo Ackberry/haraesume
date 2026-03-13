@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useAuth0 } from '@auth0/auth0-react'
+import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth'
+import { auth, googleProvider } from './firebase'
 import {
   Alert,
   AlertIcon,
@@ -59,7 +60,6 @@ const STEP_LABELS: Record<Step, string> = {
 }
 
 const isTexFile = (file: File): boolean => file.name.toLowerCase().endsWith('.tex')
-const auth0Audience = import.meta.env.VITE_AUTH0_AUDIENCE?.trim()
 
 const readApiError = async (res: Response): Promise<string> => {
   try {
@@ -126,15 +126,21 @@ const codeBlock = {
 /* ── Component ─────────────────────────────────────────── */
 
 function App() {
-  const {
-    isAuthenticated,
-    isLoading: isAuthLoading,
-    error: auth0Error,
-    loginWithRedirect,
-    logout,
-    getAccessTokenSilently,
-    user,
-  } = useAuth0()
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [waitlistStatus, setWaitlistStatus] = useState<'pending' | 'invited' | 'approved' | null>(null)
+  const [waitlistChecked, setWaitlistChecked] = useState(false)
+
+  useEffect(() => {
+    return onAuthStateChanged(auth, (u) => {
+      setFirebaseUser(u)
+      setAuthLoading(false)
+      if (!u) {
+        setWaitlistStatus(null)
+        setWaitlistChecked(false)
+      }
+    })
+  }, [])
 
   const [step, setStep] = useState<Step>('upload')
   const [resumeFile, setResumeFile] = useState<File | null>(null)
@@ -150,45 +156,42 @@ function App() {
   const currentStepIndex = STEPS.indexOf(step)
 
   const apiFetch = useCallback(async (path: string, init?: RequestInit): Promise<Response> => {
-    const token = await getAccessTokenSilently({
-      authorizationParams: auth0Audience ? { audience: auth0Audience } : undefined,
-    })
+    const token = firebaseUser ? await firebaseUser.getIdToken() : null
     const headers = new Headers(init?.headers ?? undefined)
-    headers.set('Authorization', `Bearer ${token}`)
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`)
+    }
     return fetch(path, { ...init, headers })
-  }, [getAccessTokenSilently])
-
-  const handleSignIn = useCallback(async () => {
-    setError('')
-    try {
-      await loginWithRedirect({
-        authorizationParams: auth0Audience ? { audience: auth0Audience } : undefined,
-      })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'sign in failed')
-    }
-  }, [loginWithRedirect])
-
-  const handleSignUp = useCallback(async () => {
-    setError('')
-    try {
-      await loginWithRedirect({
-        authorizationParams: {
-          ...(auth0Audience ? { audience: auth0Audience } : {}),
-          screen_hint: 'signup',
-        },
-      })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'sign up failed')
-    }
-  }, [loginWithRedirect])
+  }, [firebaseUser])
 
   const handleLogout = useCallback(() => {
-    logout({ logoutParams: { returnTo: window.location.origin } })
-  }, [logout])
+    void signOut(auth)
+  }, [])
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (!firebaseUser) {
+      return
+    }
+
+    const checkWaitlist = async () => {
+      try {
+        const res = await apiFetch('/api/waitlist-status')
+        if (!res.ok) return
+
+        const data = await res.json() as { status: 'pending' | 'invited' | 'approved' }
+        setWaitlistStatus(data.status)
+      } catch {
+        // Remain unchecked.
+      } finally {
+        setWaitlistChecked(true)
+      }
+    }
+
+    void checkWaitlist()
+  }, [apiFetch, firebaseUser])
+
+  useEffect(() => {
+    if (!firebaseUser || waitlistStatus !== 'approved') {
       return
     }
 
@@ -208,7 +211,7 @@ function App() {
     }
 
     void checkResumeStatus()
-  }, [apiFetch, isAuthenticated])
+  }, [apiFetch, firebaseUser, waitlistStatus])
 
   const handleFileSelect = useCallback(async (file: File) => {
     if (!isTexFile(file)) {
@@ -409,7 +412,7 @@ function App() {
     }
   }
 
-  if (isAuthLoading) {
+  if (authLoading) {
     return (
       <Flex minH="100vh" align="center" justify="center" direction="column" gap={4}>
         <Spinner size="lg" color="ink.900" thickness="3px" />
@@ -418,10 +421,10 @@ function App() {
     )
   }
 
-  if (!isAuthenticated) {
+  if (!firebaseUser) {
     return (
       <Flex minH="100vh" align="center" justify="center" px={6}>
-        <Stack spacing={6} w="full" maxW="lg" textAlign="center">
+        <Stack spacing={6} w="full" maxW="lg" align="center" textAlign="center">
           <Heading size="lg">resume tailoring</Heading>
           <Text color="ink.700">
             sign in to access your resume workspace.
@@ -442,31 +445,75 @@ function App() {
               {error}
             </Alert>
           )}
-          {auth0Error && (
-            <Alert
-              status="error"
-              bg="transparent"
-              color="ink.900"
-              borderLeft="3px solid"
-              borderColor="red.400"
-              borderRadius={0}
-              w="full"
-              px={4}
-              py={3}
-            >
-              <AlertIcon />
-              {auth0Error.message}
-            </Alert>
-          )}
-          <Flex gap={3} wrap="wrap" justify="center">
-            <Button type="button" onClick={() => void handleSignIn()}>
-              sign in
-            </Button>
-            <Button type="button" variant="subtle" onClick={() => void handleSignUp()}>
-              create account
-            </Button>
-          </Flex>
+          <Button
+            onClick={() => {
+              setError('')
+              signInWithPopup(auth, googleProvider).catch((err) => {
+                setError(err instanceof Error ? err.message : 'sign in failed')
+              })
+            }}
+          >
+            sign in with Google
+          </Button>
         </Stack>
+      </Flex>
+    )
+  }
+
+  if (!waitlistChecked) {
+    return (
+      <Flex minH="100vh" align="center" justify="center" direction="column" gap={4}>
+        <Spinner size="lg" color="ink.900" thickness="3px" />
+        <Text color="ink.700">checking access...</Text>
+      </Flex>
+    )
+  }
+
+  if (waitlistStatus === 'pending') {
+    return (
+      <Flex minH="100vh" align="center" justify="center" px={6}>
+        <Stack spacing={6} w="full" maxW="lg" align="center" textAlign="center">
+          <Heading size="lg">you're on the waitlist</Heading>
+          <Text color="ink.700">
+            thanks for signing up. we'll let you know when your account is ready.
+          </Text>
+          <Text color="ink.500" fontSize="sm">
+            signed in as {firebaseUser.email ?? firebaseUser.displayName ?? 'unknown'}
+          </Text>
+          <Button size="sm" variant="subtle" onClick={handleLogout}>
+            log out
+          </Button>
+        </Stack>
+      </Flex>
+    )
+  }
+
+  if (waitlistStatus === 'invited') {
+    return (
+      <Flex minH="100vh" align="center" justify="center" px={6}>
+        <Stack spacing={6} w="full" maxW="lg" align="center" textAlign="center">
+          <Heading size="lg">you've been invited</Heading>
+          <Text color="ink.700">
+            your invitation is being processed. you'll have full access shortly.
+          </Text>
+          <Text color="ink.500" fontSize="sm">
+            signed in as {firebaseUser.email ?? firebaseUser.displayName ?? 'unknown'}
+          </Text>
+          <Button size="sm" variant="subtle" onClick={handleLogout}>
+            log out
+          </Button>
+        </Stack>
+      </Flex>
+    )
+  }
+
+  if (waitlistStatus !== 'approved') {
+    return (
+      <Flex minH="100vh" align="center" justify="center" direction="column" gap={4}>
+        <Text color="ink.700">unable to verify access. please try again later.</Text>
+        <Button size="sm" variant="subtle" onClick={handleLogout}>
+          log out
+        </Button>
       </Flex>
     )
   }
@@ -477,7 +524,7 @@ function App() {
         <Stack spacing={8} w="full" align="center" textAlign="center">
           <HStack w="full" justify="space-between" align="center" fontSize="sm">
             <Text color="ink.600" noOfLines={1}>
-              {user?.email ?? user?.name ?? 'signed in'}
+              {firebaseUser.email ?? firebaseUser.displayName ?? 'signed in'}
             </Text>
             <Button size="sm" variant="subtle" onClick={handleLogout}>
               log out
