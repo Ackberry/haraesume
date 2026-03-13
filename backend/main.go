@@ -24,6 +24,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	resend "github.com/resend/resend-go/v2"
 )
 
 const (
@@ -326,6 +328,8 @@ type server struct {
 	resumeStoreDir string
 	authValidator  *firebaseValidator
 	waitlist       *waitlistStore
+	resendClient   *resend.Client
+	emailFrom      string
 }
 
 type errorResponse struct {
@@ -435,28 +439,38 @@ func main() {
 	}
 	log.Printf("Waitlist store loaded from %s (%d entries)", waitlistPath, len(waitlist.entries))
 
+	var rc *resend.Client
+	emailFrom := strings.TrimSpace(os.Getenv("RESEND_FROM_EMAIL"))
+	if emailFrom == "" {
+		emailFrom = "onboarding@resend.dev"
+	}
+	if resendKey := strings.TrimSpace(os.Getenv("RESEND_API_KEY")); resendKey != "" {
+		rc = resend.NewClient(resendKey)
+		log.Printf("Resend email client initialized (from: %s)", emailFrom)
+	} else {
+		log.Println("RESEND_API_KEY not set — email sending disabled")
+	}
+
 	s := &server{
 		state:          newAppState(),
 		resumeStoreDir: resumeStoreDir,
 		authValidator:  authValidator,
 		waitlist:       waitlist,
+		resendClient:   rc,
+		emailFrom:      emailFrom,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.healthCheck)
-
-	mux.Handle("/api/waitlist-status", s.requireAuth(http.HandlerFunc(s.waitlistStatusHandler)))
-	mux.Handle("/api/admin/waitlist", s.requireAuth(http.HandlerFunc(s.adminListWaitlist)))
-	mux.Handle("/api/admin/waitlist/update", s.requireAuth(http.HandlerFunc(s.adminUpdateWaitlist)))
-
-	mux.Handle("/api/resume-status", s.requireApproved(http.HandlerFunc(s.resumeStatus)))
-	mux.Handle("/api/upload-resume", s.requireApproved(http.HandlerFunc(s.uploadResume)))
-	mux.Handle("/api/job-description", s.requireApproved(http.HandlerFunc(s.setJobDescription)))
-	mux.Handle("/api/optimize", s.requireApproved(http.HandlerFunc(s.optimizeResume)))
-	mux.Handle("/api/cover-letter", s.requireApproved(http.HandlerFunc(s.generateCoverLetter)))
-	mux.Handle("/api/generate-application-package", s.requireApproved(http.HandlerFunc(s.generateApplicationPackage)))
-	mux.Handle("/api/generate-cover-letter-pdf", s.requireApproved(http.HandlerFunc(s.generateCoverLetterPDF)))
-	mux.Handle("/api/generate-pdf", s.requireApproved(http.HandlerFunc(s.generatePDF)))
+	mux.Handle("/api/resume-status", s.requireAuth(http.HandlerFunc(s.resumeStatus)))
+	mux.Handle("/api/upload-resume", s.requireAuth(http.HandlerFunc(s.uploadResume)))
+	mux.Handle("/api/job-description", s.requireAuth(http.HandlerFunc(s.setJobDescription)))
+	mux.Handle("/api/optimize", s.requireAuth(http.HandlerFunc(s.optimizeResume)))
+	mux.Handle("/api/cover-letter", s.requireAuth(http.HandlerFunc(s.generateCoverLetter)))
+	mux.Handle("/api/generate-application-package", s.requireAuth(http.HandlerFunc(s.generateApplicationPackage)))
+	mux.Handle("/api/generate-cover-letter-pdf", s.requireAuth(http.HandlerFunc(s.generateCoverLetterPDF)))
+	mux.Handle("/api/generate-pdf", s.requireAuth(http.HandlerFunc(s.generatePDF)))
+	mux.HandleFunc("/api/waitlist/notify-signup", s.notifyWaitlistSignup)
 
 	handler := withCORS(mux)
 	log.Printf("Server running on http://localhost:3001")
@@ -767,12 +781,25 @@ func (s *server) adminUpdateWaitlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	entry, exists := s.waitlist.getEntry(payload.UserID)
+	if !exists {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("user %s not found in waitlist", payload.UserID))
+		return
+	}
+
 	if err := s.waitlist.updateStatus(payload.UserID, payload.Status); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
 	log.Printf("Admin %s updated user %s to %s", userID, payload.UserID, payload.Status)
+
+	if payload.Status == waitlistApproved && entry.Email != "" {
+		if err := s.sendApprovalEmail(entry.Email); err != nil {
+			log.Printf("Approval email failed for %s: %v", entry.Email, err)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"message": fmt.Sprintf("User status updated to %s", payload.Status),
@@ -1172,6 +1199,99 @@ func (s *server) generatePDF(w http.ResponseWriter, r *http.Request) {
 	cleanupRan = true
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) sendWaitlistConfirmationEmail(toEmail string) error {
+	if s.resendClient == nil {
+		log.Printf("Skipping waitlist confirmation email to %s: Resend not configured", toEmail)
+		return nil
+	}
+
+	html := `<div style="font-family:-apple-system,system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px">
+<h2 style="font-size:20px;margin:0 0 16px">You're on the waitlist</h2>
+<p style="color:#444;line-height:1.6;margin:0 0 12px">Thanks for signing up for Haraesume. We'll review your request and let you know as soon as your account is ready.</p>
+<p style="color:#444;line-height:1.6;margin:0">In the meantime, have your LaTeX resume handy — you'll be able to start tailoring it the moment you're in.</p>
+<hr style="border:none;border-top:1px solid #eee;margin:28px 0 16px">
+<p style="color:#999;font-size:13px;margin:0">— Haraesume</p>
+</div>`
+
+	_, err := s.resendClient.Emails.Send(&resend.SendEmailRequest{
+		From:    s.emailFrom,
+		To:      []string{toEmail},
+		Subject: "You're on the waitlist — Haraesume",
+		Html:    html,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send waitlist confirmation to %s: %w", toEmail, err)
+	}
+	log.Printf("Sent waitlist confirmation email to %s", toEmail)
+	return nil
+}
+
+func (s *server) sendApprovalEmail(toEmail string) error {
+	if s.resendClient == nil {
+		log.Printf("Skipping approval email to %s: Resend not configured", toEmail)
+		return nil
+	}
+
+	appURL := strings.TrimSpace(os.Getenv("APP_URL"))
+	if appURL == "" {
+		appURL = "https://haraesume.com"
+	}
+
+	html := fmt.Sprintf(`<div style="font-family:-apple-system,system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px">
+<h2 style="font-size:20px;margin:0 0 16px">You've been approved!</h2>
+<p style="color:#444;line-height:1.6;margin:0 0 20px">Your Haraesume account is now active. Sign in to start tailoring your resume for every role you apply to.</p>
+<a href="%s" style="display:inline-block;padding:10px 28px;background:#111;color:#fff;text-decoration:none;border-radius:4px;font-size:14px;font-weight:500">Sign in</a>
+<hr style="border:none;border-top:1px solid #eee;margin:28px 0 16px">
+<p style="color:#999;font-size:13px;margin:0">— Haraesume</p>
+</div>`, appURL)
+
+	_, err := s.resendClient.Emails.Send(&resend.SendEmailRequest{
+		From:    s.emailFrom,
+		To:      []string{toEmail},
+		Subject: "You're in — Haraesume",
+		Html:    html,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send approval email to %s: %w", toEmail, err)
+	}
+	log.Printf("Sent approval email to %s", toEmail)
+	return nil
+}
+
+type notifySignupRequest struct {
+	Email string `json:"email"`
+}
+
+func (s *server) notifyWaitlistSignup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var payload notifySignupRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	email := strings.TrimSpace(strings.ToLower(payload.Email))
+	if email == "" || !strings.Contains(email, "@") {
+		writeError(w, http.StatusBadRequest, "Valid email is required")
+		return
+	}
+
+	if err := s.sendWaitlistConfirmationEmail(email); err != nil {
+		log.Printf("waitlist confirmation email failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "Failed to send confirmation email")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"message": "Confirmation email sent",
+	})
 }
 
 func withCORS(next http.Handler) http.Handler {
