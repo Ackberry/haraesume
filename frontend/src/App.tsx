@@ -45,13 +45,7 @@ interface ResumePdfApiResponse {
   tex_files_deleted?: boolean
 }
 
-interface ApplicationPackageResponse {
-  pdf_warnings?: string[]
-}
-
 type Step = 'upload' | 'job' | 'optimize' | 'result'
-type DownloadOption = 'resume' | 'resume_cv'
-
 const STEPS: Step[] = ['upload', 'job', 'optimize', 'result']
 
 const STEP_LABELS: Record<Step, string> = {
@@ -155,7 +149,6 @@ function App() {
   const [error, setError] = useState<string>('')
   const [dragOver, setDragOver] = useState<boolean>(false)
   const [hasSavedResume, setHasSavedResume] = useState<boolean>(false)
-  const [selectedDownloadOption, setSelectedDownloadOption] = useState<DownloadOption | null>(null)
   const [changesSummary, setChangesSummary] = useState<string[]>([])
 
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -385,7 +378,6 @@ function App() {
         .filter(Boolean)
       setChangesSummary(bullets)
 
-      setSelectedDownloadOption(null)
       setStep('result')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'optimization failed')
@@ -413,7 +405,6 @@ function App() {
   }, [])
 
   const handleDownloadResumePdf = async () => {
-    setSelectedDownloadOption('resume')
     setLoading(true)
     setError('')
 
@@ -427,53 +418,7 @@ function App() {
       const data: ResumePdfApiResponse = await res.json()
       downloadPdfFromBase64(data.pdf_base64, data.filename)
     } catch (e) {
-      setSelectedDownloadOption(null)
       setError(e instanceof Error ? e.message : 'pdf generation failed')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleDownloadResumeAndCv = async () => {
-    setSelectedDownloadOption('resume_cv')
-    setLoading(true)
-    setError('')
-
-    try {
-      const packageRes = await apiFetch('/api/generate-application-package', { method: 'POST' })
-
-      if (!packageRes.ok) {
-        throw new Error(await readApiError(packageRes))
-      }
-
-      const packageData: ApplicationPackageResponse = await packageRes.json()
-
-      const [resumeRes, cvRes] = await Promise.all([
-        apiFetch('/api/generate-pdf', { method: 'POST' }),
-        apiFetch('/api/generate-cover-letter-pdf', { method: 'POST' }),
-      ])
-
-      if (!resumeRes.ok) {
-        throw new Error(await readApiError(resumeRes))
-      }
-      if (!cvRes.ok) {
-        throw new Error(await readApiError(cvRes))
-      }
-
-      const [resumeData, cvData] = await Promise.all([
-        resumeRes.json() as Promise<ResumePdfApiResponse>,
-        cvRes.json() as Promise<ResumePdfApiResponse>,
-      ])
-
-      downloadPdfFromBase64(resumeData.pdf_base64, resumeData.filename)
-      downloadPdfFromBase64(cvData.pdf_base64, cvData.filename)
-
-      if (packageData.pdf_warnings && packageData.pdf_warnings.length > 0) {
-        setError(packageData.pdf_warnings.join('\n'))
-      }
-    } catch (e) {
-      setSelectedDownloadOption(null)
-      setError(e instanceof Error ? e.message : 'combined generation failed')
     } finally {
       setLoading(false)
     }
@@ -766,7 +711,7 @@ function App() {
             <Stack spacing={5} w="full" align="center">
               <Box textAlign="center">
                 <Heading size="md" mb={2}>job description</Heading>
-                <Text color="ink.700">paste the full description to align your resume and cover letter.</Text>
+                <Text color="ink.700">paste the full description to align your resume.</Text>
               </Box>
 
               {hasSavedResume && (
@@ -856,37 +801,16 @@ function App() {
                 </Box>
               )}
 
-              <Stack spacing={3} w="full" maxW="460px">
-                {(['resume', 'resume_cv'] as DownloadOption[]).map((option) => {
-                  const isHidden = selectedDownloadOption !== null && selectedDownloadOption !== option
-                  const isSelected = selectedDownloadOption === option
-
-                  return (
-                    <Box
-                      key={option}
-                      w="full"
-                      maxH={isHidden ? '0px' : '80px'}
-                      opacity={isHidden ? 0 : 1}
-                      transform={isHidden ? 'translateY(-4px) scale(0.98)' : 'translateY(0) scale(1)'}
-                      overflow="hidden"
-                      pointerEvents={isHidden ? 'none' : 'auto'}
-                      transition="max-height 220ms ease, opacity 220ms ease, transform 220ms ease"
-                    >
-                      <Button
-                        onClick={option === 'resume' ? handleDownloadResumePdf : handleDownloadResumeAndCv}
-                        isDisabled={loading || (selectedDownloadOption !== null && !isSelected)}
-                        leftIcon={loading && isSelected ? <Spinner size="sm" /> : <DownloadIcon boxSize={4} />}
-                        w="full"
-                        size="lg"
-                      >
-                        {option === 'resume'
-                          ? (loading && isSelected ? 'downloading resume' : 'download resume (pdf)')
-                          : (loading && isSelected ? 'downloading resume + cv' : 'download resume + cv')}
-                      </Button>
-                    </Box>
-                  )
-                })}
-              </Stack>
+              <Button
+                onClick={handleDownloadResumePdf}
+                isDisabled={loading}
+                leftIcon={loading ? <Spinner size="sm" /> : <DownloadIcon boxSize={4} />}
+                w="full"
+                maxW="460px"
+                size="lg"
+              >
+                {loading ? 'downloading resume' : 'download resume (pdf)'}
+              </Button>
             </Stack>
           )}
         </Stack>

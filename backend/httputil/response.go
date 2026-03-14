@@ -19,11 +19,6 @@ type OptimizeResponse struct {
 	ChangesSummary string `json:"changes_summary"`
 }
 
-type CoverLetterResponse struct {
-	CoverLetter      string `json:"cover_letter"`
-	CoverLetterLatex string `json:"cover_letter_latex"`
-}
-
 type PDFResponse struct {
 	PDFBase64       string   `json:"pdf_base64"`
 	Filename        string   `json:"filename"`
@@ -45,15 +40,13 @@ type ResumeStatusResponse struct {
 }
 
 type ApplicationPackageResponse struct {
-	CompanyName        string   `json:"company_name"`
-	FolderPath         string   `json:"folder_path"`
-	ResumePDFPath      string   `json:"resume_pdf_path,omitempty"`
-	CoverLetterTex     string   `json:"cover_letter_latex"`
-	CoverLetterPDFPath string   `json:"cover_letter_pdf_path,omitempty"`
-	OptimizedLatex     string   `json:"optimized_latex"`
-	ChangesSummary     string   `json:"changes_summary"`
-	PDFWarnings        []string `json:"pdf_warnings,omitempty"`
-	TexFilesDeleted    bool     `json:"tex_files_deleted"`
+	CompanyName     string   `json:"company_name"`
+	FolderPath      string   `json:"folder_path"`
+	ResumePDFPath   string   `json:"resume_pdf_path,omitempty"`
+	OptimizedLatex  string   `json:"optimized_latex"`
+	ChangesSummary  string   `json:"changes_summary"`
+	PDFWarnings     []string `json:"pdf_warnings,omitempty"`
+	TexFilesDeleted bool     `json:"tex_files_deleted"`
 }
 
 func WriteJSON(w http.ResponseWriter, status int, payload any) {
