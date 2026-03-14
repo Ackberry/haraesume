@@ -290,7 +290,7 @@ func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Requ
 
 	var pdfWarnings []string
 	resumePDFPath := filepath.Join(outputDir, resumeBaseFilename+".pdf")
-	resumePDF, err := latex.CompileToPDF(optimizedLatex)
+	resumePDF, err := latex.CompileToSinglePagePDF(optimizedLatex)
 	if err != nil {
 		pdfWarnings = append(pdfWarnings, "Resume PDF generation failed: "+err.Error())
 	} else if err := os.WriteFile(resumePDFPath, resumePDF, 0o600); err != nil {
@@ -365,7 +365,7 @@ func (h *Handler) GeneratePDF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pdfBytes, err := latex.CompileToPDF(resume)
+	pdfBytes, err := latex.CompileToSinglePagePDF(resume)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("PDF generation failed: %v", err))
 		return
