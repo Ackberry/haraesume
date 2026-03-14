@@ -156,6 +156,7 @@ function App() {
   const [dragOver, setDragOver] = useState<boolean>(false)
   const [hasSavedResume, setHasSavedResume] = useState<boolean>(false)
   const [selectedDownloadOption, setSelectedDownloadOption] = useState<DownloadOption | null>(null)
+  const [changesSummary, setChangesSummary] = useState<string[]>([])
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const currentStepIndex = STEPS.indexOf(step)
@@ -213,35 +214,41 @@ function App() {
     }
 
     const checkApproval = async () => {
+      const statusRank = { pending: 0, invited: 1, approved: 2 } as const
+      type WaitlistStatus = keyof typeof statusRank
+      let best: WaitlistStatus = 'pending'
+
       try {
         const email = (firebaseUser.email ?? '').toLowerCase()
-        if (!email) {
-          setWaitlistChecked(true)
-          return
-        }
-
-        const docRef = doc(db, 'waitlist', email)
-        const snap = await getDoc(docRef)
-
-        if (snap.exists()) {
-          setWaitlistStatus(snap.data().status as 'pending' | 'invited' | 'approved')
-        } else {
-          await setDoc(docRef, {
-            email,
-            status: 'pending',
-            created_at: serverTimestamp(),
-          })
-          setWaitlistStatus('pending')
+        if (email) {
+          const docRef = doc(db, 'waitlist', email)
+          const snap = await getDoc(docRef)
+          if (snap.exists()) {
+            const s = (snap.data().status as string ?? '').trim() as WaitlistStatus
+            if (statusRank[s] > statusRank[best]) best = s
+          }
         }
       } catch {
-        // If Firestore fails, don't block completely.
-      } finally {
-        setWaitlistChecked(true)
+        // Firestore unavailable — continue with backend check.
       }
+
+      try {
+        const res = await apiFetch('/api/waitlist/status')
+        if (res.ok) {
+          const data = await res.json() as { status: string }
+          const s = (data.status ?? '').trim() as WaitlistStatus
+          if (statusRank[s] > statusRank[best]) best = s
+        }
+      } catch {
+        // Backend unavailable — use whatever we got from Firestore.
+      }
+
+      setWaitlistStatus(best)
+      setWaitlistChecked(true)
     }
 
     void checkApproval()
-  }, [firebaseUser])
+  }, [firebaseUser, apiFetch])
 
   useEffect(() => {
     if (!firebaseUser || waitlistStatus !== 'approved') {
@@ -370,7 +377,14 @@ function App() {
         throw new Error(await readApiError(res))
       }
 
-      await res.json() as Promise<OptimizeApiResponse>
+      const data: OptimizeApiResponse = await res.json()
+
+      const bullets = (data.changes_summary ?? '')
+        .split('\n')
+        .map((line) => line.replace(/^[-•*]\s*/, '').trim())
+        .filter(Boolean)
+      setChangesSummary(bullets)
+
       setSelectedDownloadOption(null)
       setStep('result')
     } catch (e) {
@@ -827,6 +841,20 @@ function App() {
                 <Heading size="md" mb={2}>optimized result</Heading>
                 <Text color="ink.700">choose one download option.</Text>
               </Box>
+
+              {changesSummary.length > 0 && (
+                <Box w="full" maxW="560px" textAlign="left">
+                  <Text fontWeight="semibold" mb={3} color="ink.800">changes made</Text>
+                  <List spacing={2} color="ink.700" fontSize="sm">
+                    {changesSummary.map((change, i) => (
+                      <ListItem key={i}>
+                        <ListIcon as={CheckIcon} color="ink.600" />
+                        {change}
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )}
 
               <Stack spacing={3} w="full" maxW="460px">
                 {(['resume', 'resume_cv'] as DownloadOption[]).map((option) => {
