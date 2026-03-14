@@ -101,7 +101,12 @@ func (h *Handler) UploadResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	content := string(data)
+	if err := llm.ValidateInputLength(string(data), llm.MaxResumeBytes, "Resume"); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	content := llm.SanitizeUserInput(string(data))
 	userID := auth.RequestUserID(r)
 	h.state.SetBaseResume(userID, content)
 	if err := h.storage.PersistBaseResume(userID, content); err != nil {
@@ -128,8 +133,14 @@ func (h *Handler) SetJobDescription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := llm.ValidateInputLength(payload.JobDescription, llm.MaxJobDescriptionBytes, "Job description"); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	sanitizedJD := llm.SanitizeUserInput(payload.JobDescription)
 	userID := auth.RequestUserID(r)
-	h.state.SetJobDescription(userID, payload.JobDescription)
+	h.state.SetJobDescription(userID, sanitizedJD)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"message": "Job description saved",
@@ -173,43 +184,6 @@ func (h *Handler) OptimizeResume(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) GenerateCoverLetter(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		httputil.WriteError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	userID := auth.RequestUserID(r)
-	if err := h.storage.EnsureBaseResumeLoaded(h.state, userID); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
-		return
-	}
-
-	resume, ok := h.state.GetBaseResume(userID)
-	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "No base resume found")
-		return
-	}
-
-	jobDescription, ok := h.state.GetJobDescription(userID)
-	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "No job description provided")
-		return
-	}
-
-	coverLetter, err := llm.GenerateCoverLetter(resume, jobDescription)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("LLM error: %v", err))
-		return
-	}
-	h.state.SetCoverLetter(userID, coverLetter)
-
-	httputil.WriteJSON(w, http.StatusOK, httputil.CoverLetterResponse{
-		CoverLetter:      coverLetter,
-		CoverLetterLatex: coverLetter,
-	})
-}
-
 func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -240,14 +214,7 @@ func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	coverLetterLatex, err := llm.GenerateCoverLetter(optimizedLatex, jobDescription)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Cover letter generation failed: %v", err))
-		return
-	}
-
 	h.state.SetOptimizedResume(userID, optimizedLatex)
-	h.state.SetCoverLetter(userID, coverLetterLatex)
 
 	companyName, outputDir, err := prepareCompanyOutputDir(jobDescription, userID)
 	if err != nil {
@@ -255,15 +222,11 @@ func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	resumeBaseFilename := llm.BuildResumeBaseFilename(companyName)
-	cvBaseFilename := llm.BuildCVBaseFilename(companyName)
 
 	resumeTexPath := filepath.Join(outputDir, resumeBaseFilename+".tex")
-	coverLetterTexPath := filepath.Join(outputDir, cvBaseFilename+".tex")
 	cleanupRan := false
 	cleanupTexFiles := func() bool {
-		resumeRemoved := removeIfExists(resumeTexPath)
-		coverRemoved := removeIfExists(coverLetterTexPath)
-		return resumeRemoved && coverRemoved
+		return removeIfExists(resumeTexPath)
 	}
 	defer func() {
 		if !cleanupRan {
@@ -275,15 +238,10 @@ func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Requ
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to save resume file: %v", err))
 		return
 	}
-	if err := os.WriteFile(coverLetterTexPath, []byte(coverLetterLatex), 0o600); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to save cover letter file: %v", err))
-		return
-	}
 
 	response := httputil.ApplicationPackageResponse{
 		CompanyName:    companyName,
 		FolderPath:     safeAbsPath(outputDir),
-		CoverLetterTex: coverLetterLatex,
 		OptimizedLatex: optimizedLatex,
 		ChangesSummary: changesSummary,
 	}
@@ -299,16 +257,6 @@ func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Requ
 		response.ResumePDFPath = safeAbsPath(resumePDFPath)
 	}
 
-	coverLetterPDFPath := filepath.Join(outputDir, cvBaseFilename+".pdf")
-	coverLetterPDF, err := latex.CompileToPDF(coverLetterLatex)
-	if err != nil {
-		pdfWarnings = append(pdfWarnings, "Cover letter PDF generation failed: "+err.Error())
-	} else if err := os.WriteFile(coverLetterPDFPath, coverLetterPDF, 0o600); err != nil {
-		pdfWarnings = append(pdfWarnings, "Cover letter PDF save failed: "+err.Error())
-	} else {
-		response.CoverLetterPDFPath = safeAbsPath(coverLetterPDFPath)
-	}
-
 	if len(pdfWarnings) > 0 {
 		response.PDFWarnings = pdfWarnings
 	}
@@ -316,35 +264,6 @@ func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Requ
 	cleanupRan = true
 
 	httputil.WriteJSON(w, http.StatusOK, response)
-}
-
-func (h *Handler) GenerateCoverLetterPDF(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		httputil.WriteError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	userID := auth.RequestUserID(r)
-	coverLetterLatex, ok := h.state.GetCoverLetter(userID)
-	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "No generated cover letter found. Generate one first.")
-		return
-	}
-
-	pdfBytes, err := latex.CompileToPDF(coverLetterLatex)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("PDF generation failed: %v", err))
-		return
-	}
-
-	jobDescription, _ := h.state.GetJobDescription(userID)
-	companyName := llm.ResolveCompanyName(jobDescription)
-	cvFilename := llm.BuildCVBaseFilename(companyName) + ".pdf"
-
-	httputil.WriteJSON(w, http.StatusOK, httputil.PDFResponse{
-		PDFBase64: base64.StdEncoding.EncodeToString(pdfBytes),
-		Filename:  cvFilename,
-	})
 }
 
 func (h *Handler) GeneratePDF(w http.ResponseWriter, r *http.Request) {

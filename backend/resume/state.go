@@ -7,7 +7,6 @@ import (
 type UserState struct {
 	baseResume            *string
 	currentOptimized      *string
-	currentCoverLetter    *string
 	currentJobDescription *string
 }
 
@@ -38,7 +37,6 @@ func (s *State) SetBaseResume(userID, value string) {
 	v := value
 	state.baseResume = &v
 	state.currentOptimized = nil
-	state.currentCoverLetter = nil
 }
 
 func (s *State) SetOptimizedResume(userID, value string) {
@@ -47,14 +45,6 @@ func (s *State) SetOptimizedResume(userID, value string) {
 	state := s.getOrCreateLocked(userID)
 	v := value
 	state.currentOptimized = &v
-}
-
-func (s *State) SetCoverLetter(userID, value string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state := s.getOrCreateLocked(userID)
-	v := value
-	state.currentCoverLetter = &v
 }
 
 func (s *State) GetBaseResume(userID string) (string, bool) {
@@ -90,7 +80,6 @@ func (s *State) SetJobDescription(userID, value string) {
 	v := value
 	state.currentJobDescription = &v
 	state.currentOptimized = nil
-	state.currentCoverLetter = nil
 }
 
 func (s *State) GetJobDescription(userID string) (string, bool) {
@@ -103,12 +92,3 @@ func (s *State) GetJobDescription(userID string) (string, bool) {
 	return *state.currentJobDescription, true
 }
 
-func (s *State) GetCoverLetter(userID string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	state, ok := s.users[userID]
-	if !ok || state.currentCoverLetter == nil {
-		return "", false
-	}
-	return *state.currentCoverLetter, true
-}

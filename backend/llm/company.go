@@ -162,10 +162,6 @@ func BuildResumeBaseFilename(companyName string) string {
 	return fmt.Sprintf("Akbari, Deep[(%s)]", SanitizeCompanyForFilename(companyName))
 }
 
-func BuildCVBaseFilename(companyName string) string {
-	return fmt.Sprintf("CV_[%s]", SanitizeCompanyForFilename(companyName))
-}
-
 func parseCompanyNameAgentOutput(content string) string {
 	type payload struct {
 		CompanyName string `json:"company_name"`
