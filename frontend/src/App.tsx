@@ -214,35 +214,41 @@ function App() {
     }
 
     const checkApproval = async () => {
+      const statusRank = { pending: 0, invited: 1, approved: 2 } as const
+      type WaitlistStatus = keyof typeof statusRank
+      let best: WaitlistStatus = 'pending'
+
       try {
         const email = (firebaseUser.email ?? '').toLowerCase()
-        if (!email) {
-          setWaitlistChecked(true)
-          return
-        }
-
-        const docRef = doc(db, 'waitlist', email)
-        const snap = await getDoc(docRef)
-
-        if (snap.exists()) {
-          setWaitlistStatus(snap.data().status as 'pending' | 'invited' | 'approved')
-        } else {
-          await setDoc(docRef, {
-            email,
-            status: 'pending',
-            created_at: serverTimestamp(),
-          })
-          setWaitlistStatus('pending')
+        if (email) {
+          const docRef = doc(db, 'waitlist', email)
+          const snap = await getDoc(docRef)
+          if (snap.exists()) {
+            const s = (snap.data().status as string ?? '').trim() as WaitlistStatus
+            if (statusRank[s] > statusRank[best]) best = s
+          }
         }
       } catch {
-        // If Firestore fails, don't block completely.
-      } finally {
-        setWaitlistChecked(true)
+        // Firestore unavailable — continue with backend check.
       }
+
+      try {
+        const res = await apiFetch('/api/waitlist/status')
+        if (res.ok) {
+          const data = await res.json() as { status: string }
+          const s = (data.status ?? '').trim() as WaitlistStatus
+          if (statusRank[s] > statusRank[best]) best = s
+        }
+      } catch {
+        // Backend unavailable — use whatever we got from Firestore.
+      }
+
+      setWaitlistStatus(best)
+      setWaitlistChecked(true)
     }
 
     void checkApproval()
-  }, [firebaseUser])
+  }, [firebaseUser, apiFetch])
 
   useEffect(() => {
     if (!firebaseUser || waitlistStatus !== 'approved') {
