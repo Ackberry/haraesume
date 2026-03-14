@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from functools import lru_cache
 from typing import Any
 
@@ -35,6 +36,41 @@ def _build_model() -> ChatOpenAI | None:
     )
 
 
+_ADJACENT_SKILL_THRESHOLD = 5
+
+
+def _infer_adjacent_skills(jd_text: str, jd_requirements: dict[str, Any], model) -> list[str]:
+    """Ask the LLM for adjacent high-demand skills when the JD has sparse skill signals."""
+    existing = jd_requirements.get("required_skills", []) + jd_requirements.get("preferred_skills", [])
+    prompt = (
+        "You are a technical recruiting expert. A job description has few explicit skill signals. "
+        "Based on its content and responsibilities, list adjacent high-demand skills that commonly "
+        "appear in similar job postings at other companies. "
+        "Respond with ONLY a JSON array of lowercase skill strings. Max 10 items."
+    )
+    payload = {
+        "job_description_excerpt": jd_text[:1500],
+        "detected_skills": existing,
+        "responsibilities": jd_requirements.get("responsibilities", [])[:4],
+    }
+    result = model.invoke(
+        [
+            SystemMessage(content=prompt),
+            HumanMessage(content=json.dumps(payload)),
+        ]
+    )
+    content = getattr(result, "content", "").strip()
+    # Strip markdown code fences if present
+    content = re.sub(r"^```[a-z]*\n?", "", content).rstrip("`").strip()
+    try:
+        skills = json.loads(content)
+        if isinstance(skills, list):
+            return [str(s).lower().strip() for s in skills if str(s).strip()][:10]
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
 def validate_input_node(state: ResumeMatchState) -> ResumeMatchState:
     resume = (state.get("resume_text") or "").strip()
     job_description = (state.get("job_description") or "").strip()
@@ -63,6 +99,18 @@ def job_analysis_node(state: ResumeMatchState) -> ResumeMatchState:
     job_description = state["job_description"]
     jd_requirements = parse_job_requirements.invoke({"job_description": job_description})
     jd_keywords = extract_keywords.invoke({"text": job_description, "max_keywords": 40})
+
+    total_skills = len(jd_requirements.get("required_skills", [])) + len(jd_requirements.get("preferred_skills", []))
+    if total_skills < _ADJACENT_SKILL_THRESHOLD:
+        model = _build_model()
+        if model is not None:
+            adjacent = _infer_adjacent_skills(job_description, jd_requirements, model)
+            if adjacent:
+                existing_required = set(jd_requirements.get("required_skills", []))
+                existing_preferred = set(jd_requirements.get("preferred_skills", []))
+                augmented_preferred = sorted(existing_preferred | (set(adjacent) - existing_required))
+                jd_requirements = {**jd_requirements, "preferred_skills": augmented_preferred}
+
     return {
         "jd_requirements": jd_requirements,
         "jd_keywords": jd_keywords,

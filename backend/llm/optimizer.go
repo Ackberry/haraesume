@@ -62,6 +62,7 @@ Hard constraints:
 4. Focus edits on the Technical Skills section by adding only a small set of high-value, job-relevant skills.
 5. Do not flood the Technical Skills section with every keyword from the job description.
 6. Never invent accomplishments, dates, companies, metrics, or responsibilities.
+7. The final resume MUST fit on exactly one page. Do not add content that would push it to a second page.
 
 Technical Skills policy:
 - Add at most 5 missing skills/tools/frameworks total.
