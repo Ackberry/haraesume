@@ -47,7 +47,7 @@ func (h *Handler) ResumeStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := auth.RequestUserID(r)
-	if err := h.storage.EnsureBaseResumeLoaded(h.state, userID); err != nil {
+	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
 		return
 	}
@@ -109,7 +109,7 @@ func (h *Handler) UploadResume(w http.ResponseWriter, r *http.Request) {
 	content := llm.SanitizeUserInput(string(data))
 	userID := auth.RequestUserID(r)
 	h.state.SetBaseResume(userID, content)
-	if err := h.storage.PersistBaseResume(userID, content); err != nil {
+	if err := h.storage.PersistBaseResume(r.Context(), userID, content); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to persist resume: %v", err))
 		return
 	}
@@ -154,7 +154,7 @@ func (h *Handler) OptimizeResume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := auth.RequestUserID(r)
-	if err := h.storage.EnsureBaseResumeLoaded(h.state, userID); err != nil {
+	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
 		return
 	}
@@ -191,7 +191,7 @@ func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Requ
 	}
 
 	userID := auth.RequestUserID(r)
-	if err := h.storage.EnsureBaseResumeLoaded(h.state, userID); err != nil {
+	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
 		return
 	}
@@ -273,7 +273,7 @@ func (h *Handler) GeneratePDF(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := auth.RequestUserID(r)
-	if err := h.storage.EnsureBaseResumeLoaded(h.state, userID); err != nil {
+	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
 		return
 	}

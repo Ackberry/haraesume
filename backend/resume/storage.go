@@ -1,30 +1,36 @@
 package resume
 
 import (
+	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
-	"unicode/utf8"
+	"time"
+
+	"cloud.google.com/go/firestore"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
+const (
+	resumeCollection = "resumes"
+	ttlDuration      = 7 * 24 * time.Hour
+)
+
+type resumeDocument struct {
+	TexContent string    `firestore:"tex_content"`
+	UploadedAt time.Time `firestore:"uploaded_at"`
+	ExpireAt   time.Time `firestore:"expire_at"`
+	FileSize   int       `firestore:"file_size"`
+}
+
 type Storage struct {
-	dir string
+	client *firestore.Client
 }
 
-func NewStorage(dir string) *Storage {
-	return &Storage{dir: dir}
-}
-
-func (st *Storage) Dir() string {
-	return st.dir
-}
-
-func (st *Storage) UserResumeFilePath(userID string) string {
-	return filepath.Join(st.dir, UserStorageDirName(userID), "base_resume.tex")
+func NewStorage(client *firestore.Client) *Storage {
+	return &Storage{client: client}
 }
 
 func UserStorageDirName(userID string) string {
@@ -32,38 +38,53 @@ func UserStorageDirName(userID string) string {
 	return fmt.Sprintf("user_%x", sum)
 }
 
-func (st *Storage) LoadPersistedBaseResume(state *State, userID string) error {
-	data, err := os.ReadFile(st.UserResumeFilePath(userID))
+func (st *Storage) LoadPersistedBaseResume(ctx context.Context, state *State, userID string) error {
+	doc, err := st.client.Collection(resumeCollection).Doc(userID).Get(ctx)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if status.Code(err) == codes.NotFound {
 			return nil
 		}
-		return err
+		return fmt.Errorf("firestore read failed: %w", err)
 	}
-	if !utf8.Valid(data) {
-		return errors.New("persisted resume is not valid UTF-8")
+
+	var resume resumeDocument
+	if err := doc.DataTo(&resume); err != nil {
+		return fmt.Errorf("firestore unmarshal failed: %w", err)
 	}
-	content := strings.TrimSpace(strings.TrimPrefix(string(data), "\ufeff"))
-	if content == "" {
+
+	if resume.TexContent == "" {
 		return nil
 	}
-	state.SetBaseResume(userID, content)
-	log.Printf("Loaded persisted base resume for user %s (%d chars)", UserStorageDirName(userID), len(content))
+
+	// Defense-in-depth: Firestore TTL deletion is eventually consistent,
+	// so check expiry in application code as well.
+	if time.Now().After(resume.ExpireAt) {
+		return nil
+	}
+
+	state.SetBaseResume(userID, resume.TexContent)
+	log.Printf("Loaded persisted base resume for user %s (%d chars)", UserStorageDirName(userID), len(resume.TexContent))
 	return nil
 }
 
-func (st *Storage) EnsureBaseResumeLoaded(state *State, userID string) error {
+func (st *Storage) EnsureBaseResumeLoaded(ctx context.Context, state *State, userID string) error {
 	if _, ok := state.GetBaseResume(userID); ok {
 		return nil
 	}
-	return st.LoadPersistedBaseResume(state, userID)
+	return st.LoadPersistedBaseResume(ctx, state, userID)
 }
 
-func (st *Storage) PersistBaseResume(userID, content string) error {
-	path := st.UserResumeFilePath(userID)
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+func (st *Storage) PersistBaseResume(ctx context.Context, userID, content string) error {
+	now := time.Now()
+	doc := resumeDocument{
+		TexContent: content,
+		UploadedAt: now,
+		ExpireAt:   now.Add(ttlDuration),
+		FileSize:   len(content),
 	}
-	return os.WriteFile(path, []byte(content), 0o600)
+	_, err := st.client.Collection(resumeCollection).Doc(userID).Set(ctx, doc)
+	if err != nil {
+		return fmt.Errorf("firestore write failed: %w", err)
+	}
+	return nil
 }
