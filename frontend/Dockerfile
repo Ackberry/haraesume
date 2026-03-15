@@ -1,4 +1,5 @@
-FROM node:25-alpine
+# Build stage
+FROM node:22-alpine AS builder
 
 ARG VITE_FIREBASE_API_KEY
 ARG VITE_FIREBASE_AUTH_DOMAIN
@@ -9,17 +10,24 @@ ENV VITE_FIREBASE_AUTH_DOMAIN=${VITE_FIREBASE_AUTH_DOMAIN}
 ENV VITE_FIREBASE_PROJECT_ID=${VITE_FIREBASE_PROJECT_ID}
 
 WORKDIR /app
-
-COPY package.json .
-
-RUN npm install
-
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
-
 RUN npm run build
 
-EXPOSE 5173
+# Production stage — nginx serves static files and proxies /api to the backend
+FROM nginx:stable-alpine
 
-RUN npm run build
+RUN apk add --no-cache gettext
 
-CMD [ "npm", "run", "dev" ]
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV PORT=8080
+ENV BACKEND_URL=http://localhost:3001
+
+EXPOSE 8080
+
+ENTRYPOINT ["/entrypoint.sh"]

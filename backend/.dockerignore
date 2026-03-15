@@ -1,0 +1,12 @@
+.env
+.env.local
+.gitignore
+FirestoreJson/
+state/
+applications/
+bin/
+*.test
+coverage.out
+*.tmp
+*.temp
+.DS_Store
