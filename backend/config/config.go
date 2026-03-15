@@ -16,7 +16,6 @@ const (
 	OpenRouterBaseURL          = "https://openrouter.ai/api/v1/chat/completions"
 	OpenRouterModel            = "anthropic/claude-sonnet-4"
 	MaxMultipartMemory         = 16 << 20
-	DefaultResumeStoreDir      = "state/user_resumes"
 	DefaultApplicationsDirName = "applications"
 	AnonymousUserID            = "anonymous-user"
 )
@@ -74,20 +73,6 @@ func LoadEnvFile(path string) error {
 	}
 
 	return scanner.Err()
-}
-
-func ResolveResumeStoreDir() string {
-	configured := strings.TrimSpace(os.Getenv("RESUME_STORE_PATH"))
-	if configured == "" {
-		if DirExists("/data") {
-			return "/data/user_resumes"
-		}
-		return DefaultResumeStoreDir
-	}
-	if strings.EqualFold(filepath.Ext(configured), ".tex") {
-		return filepath.Join(filepath.Dir(configured), "user_resumes")
-	}
-	return configured
 }
 
 func ResolveWaitlistFilePath() string {

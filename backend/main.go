@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"cloud.google.com/go/firestore"
 
 	"backend/auth"
 	"backend/config"
@@ -22,9 +25,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	resumeStoreDir := config.ResolveResumeStoreDir()
+	projectID := strings.TrimSpace(config.GetEnv("FIREBASE_PROJECT_ID"))
+	if projectID == "" {
+		log.Fatal("FIREBASE_PROJECT_ID is required for Firestore")
+	}
+	fsClient, err := firestore.NewClient(context.Background(), projectID)
+	if err != nil {
+		log.Fatalf("Failed to create Firestore client: %v", err)
+	}
+	defer fsClient.Close()
+
 	resumeState := resume.NewState()
-	resumeStorage := resume.NewStorage(resumeStoreDir)
+	resumeStorage := resume.NewStorage(fsClient)
 
 	waitlistPath := config.ResolveWaitlistFilePath()
 	wlStore, wlErr := waitlist.NewStore(waitlistPath)
