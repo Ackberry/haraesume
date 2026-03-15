@@ -19,6 +19,7 @@ import {
   Stack,
   Text,
   Textarea,
+  CloseButton,
   type IconProps,
 } from '@chakra-ui/react'
 
@@ -149,6 +150,7 @@ function App() {
   const [error, setError] = useState<string>('')
   const [dragOver, setDragOver] = useState<boolean>(false)
   const [hasSavedResume, setHasSavedResume] = useState<boolean>(false)
+  const [showRetentionNotice, setShowRetentionNotice] = useState(false)
   const [changesSummary, setChangesSummary] = useState<string[]>([])
 
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -265,6 +267,21 @@ function App() {
 
     void checkResumeStatus()
   }, [apiFetch, firebaseUser, waitlistStatus])
+
+  useEffect(() => {
+    if (!firebaseUser || waitlistStatus !== 'approved') return
+    const key = `retention_notice_dismissed_${firebaseUser.uid}`
+    if (!localStorage.getItem(key)) {
+      setShowRetentionNotice(true)
+    }
+  }, [firebaseUser, waitlistStatus])
+
+  const dismissRetentionNotice = useCallback(() => {
+    setShowRetentionNotice(false)
+    if (firebaseUser) {
+      localStorage.setItem(`retention_notice_dismissed_${firebaseUser.uid}`, '1')
+    }
+  }, [firebaseUser])
 
   const handleFileSelect = useCallback(async (file: File) => {
     if (!isTexFile(file)) {
@@ -816,6 +833,31 @@ function App() {
         </Stack>
 
       </Box>
+
+      {showRetentionNotice && (
+        <Box
+          position="fixed"
+          bottom={6}
+          left="50%"
+          transform="translateX(-50%)"
+          w="auto"
+          maxW="sm"
+          bg="red.50"
+          border="1px solid"
+          borderColor="red.200"
+          boxShadow="lg"
+          px={5}
+          py={4}
+          zIndex="popover"
+        >
+          <Flex align="flex-start" gap={3}>
+            <Text fontSize="sm" color="ink.700" flex="1">
+              resumes are automatically deleted after 7 days.
+            </Text>
+            <CloseButton size="sm" onClick={dismissRetentionNotice} />
+          </Flex>
+        </Box>
+      )}
     </Flex>
   )
 }
