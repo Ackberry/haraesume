@@ -1,0 +1,176 @@
+
+
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+% serif font - Charter 
+\usepackage{charter}
+\input{glyphtounicode}
+
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Adjust margins
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Sections formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+\pdfgentounicode=1
+
+%-------------------------
+% Custom commands
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
+
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+%-------------------------------------------
+%%%%%%  RESUME STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{document}
+
+%----------HEADING----------
+\begin{center}
+    \textbf{\Huge \scshape Deep Akbari} \\ \vspace{1pt}
+    \href{https://www.linkedin.com/in/deep-akbari/}{\underline{LinkedIn}} $|$
+    \href{https://github.com/ackberry}{\underline{GitHub}} $|$
+    \href{mailto:ackberrie@gmail.com}{\underline{ackberrie@gmail.com}} $|$
+    (813) 521-9904 $|$
+    \href{https://ackberry.club/}{\underline{Portfolio}}
+\end{center}
+
+%-----------EDUCATION-----------
+\section{Education}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {University of South Florida}{May 2027}
+      {Computer Science B.S.}{Tampa, FL}
+      \vspace{2pt}
+      \\ \vspace{4pt}
+      \small\textbf{Relevant Coursework:} Data Structures, Object Oriented Programming, Computer Logic, Probability \& Statistics, Computer Architecture
+  \resumeSubHeadingListEnd
+
+%-----------EXPERIENCE-----------
+\section{Experience}
+  \resumeSubHeadingListStart
+
+    \resumeSubheading
+      {Fedcon}{February 2026 -- Present}
+      {AI Engineer Intern}{Tampa, FL}
+      \resumeItemListStart
+        \resumeItem{Engineered a custom sentiment fusion layer combining \textbf{GMotion} and \textbf{wav2vec2} models, generating fine-grained emotional signals that improved coaching feedback accuracy for \textbf{100+} daily calls.}
+        \resumeItem{Built a PCI-compliant payment system using \textbf{NMI Payment API} and a serverless \textbf{vanilla JS} backend integrated with HubSpot, enabling clients to review and process quotes within a single seamless flow.}
+        \resumeItem{Developed Fedcon's customer-facing company website (\textbf{React}), deployed as the primary touchpoint for potential clients across products and services, driving brand credibility and enabling prospect engagement at scale.}
+      \resumeItemListEnd
+
+    \resumeSubheading
+      {CacheAI}{July 2025 -- September 2025}
+      {Software Engineer Intern}{Kansas City, KS}
+      \resumeItemListStart
+        \resumeItem{Deployed an LLM-based user scoring pipeline using \textbf{Gemini API}, automating candidate ranking across a job board serving \textbf{200+} active users and eliminating manual evaluation bottlenecks.}
+        \resumeItem{Built a \textbf{Python} ETL system that cleaned and ranked structured data from \textbf{2,000+} U.S. engineering schools, replacing an entirely manual workflow and reducing processing time by over \textbf{80\%}.}
+        \resumeItem{Implemented and validated a weighted scoring framework (60/40 split) against real user profiles, improving ranking consistency and enabling data-driven placement decisions at scale.}
+      \resumeItemListEnd
+
+    \resumeSubheading
+      {USF RARE Lab}{May 2025 -- July 2025}
+      {Robotics Researcher}{Tampa, FL}
+      \resumeItemListStart
+        \resumeItem{Co-authored and \textbf{published} an \textbf{ACM HRI 2026 Companion} paper on a low-cost LLM-powered social robot, contributing novel architecture designs recognized at an international conference.}
+        \resumeItem{Built a full conversational robotics system on \textbf{Raspberry Pi (Linux)}, integrating \textbf{VoskSTT}, \textbf{Gemini LLM}, and \textbf{PiperTTS} into a seamless end-to-end assistive interaction pipeline.}
+        \resumeItem{Fine-tuned \textbf{Gemini 2.5 Flash} and \textbf{Llama} for a multimodal assistive robot, improving task success rates by \textbf{35\%} over baseline across structured evaluation benchmarks.}
+      \resumeItemListEnd
+
+  \resumeSubHeadingListEnd
+
+%-----------PROJECTS-----------
+\section{Projects}
+    \resumeSubHeadingListStart
+
+      \resumeProjectHeading
+        {\textbf{\underline{\href{https://github.com/Ackberry/cinetune}{Alleaf -- Hacklytics 2026 Best Overall}}} $|$ \emph{LangChain, Actian VectorDB, ESP-32, Firebase, Next.js}}{}
+        \resumeItemListStart
+          \resumeItem{Built a mental health platform integrating hardware haptics and AI-guided therapy for real-time stress intervention, winning \textbf{Best Overall} out of \textbf{250+} teams at Hacklytics 2026.}
+          \resumeItem{Developed a \textbf{LangChain} multi-agent system with \textbf{vector memory} to personalize therapy sessions using live biometric signals collected from custom \textbf{ESP-32} hardware.}
+        \resumeItemListEnd
+
+
+      \resumeProjectHeading
+        {\textbf{\underline{\href{https://github.com/Ackberry/haraesume}{Haraesume}}} $|$ \emph{Go, LangChain, AWS Aurora, Auth0, pgvector}}{}
+        \resumeItemListStart
+          \resumeItem{Built a resume optimization platform in \textbf{Go} that generates ATS-compliant resumes with built-in validation, leveraging \textbf{LangChain} agents and \textbf{PostgreSQL + pgvector} for context-aware retrieval.}
+        \resumeItemListEnd
+
+    \resumeSubHeadingListEnd
+%-----------TECHNICAL SKILLS-----------
+\section{Technical Skills}
+\resumeSubHeadingListStart
+  \item \small{
+    \textbf{Languages}: Golang, Python, C/C++, JavaScript, TypeScript, HTML/CSS, LaTeX \\
+    \textbf{Frameworks \& Libraries}: LangChain, Next.js, React, Express.js, Flask, Django, , Node.js \\
+    \textbf{Databases \& Servers}: MongoDB, PostgreSQL, Redis, Supabase, Firebase, AWS Aurora, pgvector \\
+    \textbf{Infrastructure \& DevOps}: Docker, Kubernetes, Google Cloud Platform, Amazon Web Services, Nginx
+  }
+\resumeSubHeadingListEnd
+%-----------LEADERSHIP-----------
+\section{Leadership}
+\resumeSubHeadingListStart
+  \resumeSubheading
+    {Google Developer Group}{April 2025 -- December 2025}
+    {Technical Lead}{Tampa, FL}
+\resumeSubHeadingListEnd
+
+
+
+\end{document}
