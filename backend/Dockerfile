@@ -1,5 +1,5 @@
 # Build Go binary
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -25,6 +25,9 @@ RUN pip install --no-cache-dir -r /app/python/requirements.txt
 
 COPY agents/ /app/python/
 COPY --from=builder /out/app /usr/local/bin/app
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 3001
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["app"]
