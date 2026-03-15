@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"backend/auth"
 	"backend/config"
@@ -46,14 +47,17 @@ func main() {
 	rh := resume.NewHandler(resumeState, resumeStorage)
 	wh := waitlist.NewHandler(wlStore, mailer)
 	requireAuth := auth.RequireAuth(authValidator)
+	llmLimiter := httputil.NewRateLimiter(1*time.Minute, auth.RequestUserID)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", rh.HealthCheck)
 	mux.Handle("/api/resume-status", requireAuth(http.HandlerFunc(rh.ResumeStatus)))
 	mux.Handle("/api/upload-resume", requireAuth(http.HandlerFunc(rh.UploadResume)))
 	mux.Handle("/api/job-description", requireAuth(http.HandlerFunc(rh.SetJobDescription)))
-	mux.Handle("/api/optimize", requireAuth(http.HandlerFunc(rh.OptimizeResume)))
-	mux.Handle("/api/generate-application-package", requireAuth(http.HandlerFunc(rh.GenerateApplicationPackage)))
+	mux.Handle("/api/optimize",
+		requireAuth(httputil.WithRateLimit(llmLimiter, http.HandlerFunc(rh.OptimizeResume))))
+	mux.Handle("/api/generate-application-package",
+		requireAuth(httputil.WithRateLimit(llmLimiter, http.HandlerFunc(rh.GenerateApplicationPackage))))
 	mux.Handle("/api/generate-pdf", requireAuth(http.HandlerFunc(rh.GeneratePDF)))
 	mux.HandleFunc("/api/waitlist/notify-signup", wh.NotifySignupHandler)
 	mux.Handle("/api/waitlist/status", requireAuth(http.HandlerFunc(wh.StatusHandler)))
