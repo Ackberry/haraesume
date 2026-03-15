@@ -87,8 +87,9 @@ func main() {
 	mux.Handle("/api/admin/waitlist/update", requireAuth(http.HandlerFunc(wh.AdminUpdateHandler)))
 
 	handler := httputil.WithCORS(mux)
-	log.Printf("Server running on http://localhost:3001")
-	if err := http.ListenAndServe(config.ServerAddr, handler); err != nil {
+	addr := config.ServerAddr()
+	log.Printf("Server running on %s", addr)
+	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatal(err)
 	}
 }
