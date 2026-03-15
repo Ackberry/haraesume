@@ -39,6 +39,8 @@ func UserStorageDirName(userID string) string {
 }
 
 func (st *Storage) LoadPersistedBaseResume(ctx context.Context, state *State, userID string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	doc, err := st.client.Collection(resumeCollection).Doc(userID).Get(ctx)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
@@ -75,6 +77,8 @@ func (st *Storage) EnsureBaseResumeLoaded(ctx context.Context, state *State, use
 }
 
 func (st *Storage) PersistBaseResume(ctx context.Context, userID, content string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	now := time.Now()
 	doc := resumeDocument{
 		TexContent: content,
