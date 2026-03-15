@@ -48,3 +48,7 @@ coverage.out
 
 #codex
 .codex
+
+#Claude
+CLAUDE.md
+.claude/
