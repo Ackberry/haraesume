@@ -29,11 +29,21 @@ func main() {
 	if projectID == "" {
 		log.Fatal("FIREBASE_PROJECT_ID is required for Firestore")
 	}
-	fsClient, err := firestore.NewClient(context.Background(), projectID)
+	fsCtx, fsCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer fsCancel()
+	fsClient, err := firestore.NewClient(fsCtx, projectID)
 	if err != nil {
 		log.Fatalf("Failed to create Firestore client: %v", err)
 	}
 	defer fsClient.Close()
+
+	// Verify Firestore connectivity at startup so we fail fast.
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer pingCancel()
+	iter := fsClient.Collection("resumes").Limit(1).Documents(pingCtx)
+	_, _ = iter.Next()
+	iter.Stop()
+	log.Println("Firestore connectivity verified")
 
 	resumeState := resume.NewState()
 	resumeStorage := resume.NewStorage(fsClient)

@@ -113,7 +113,7 @@ export OPENROUTER_API_KEY="your-openrouter-api-key"
 export AUTH_PROVIDER="auth0"
 export AUTH0_DOMAIN="your-tenant.us.auth0.com"
 export AUTH0_ISSUER_BASE_URL="https://your-tenant.us.auth0.com"
-export AUTH0_AUDIENCE="https://api.haraesume.com"
+export AUTH0_AUDIENCE="https://haraesume.ackberry.dev"
 go run .
 # Server: http://localhost:3001
 ```
