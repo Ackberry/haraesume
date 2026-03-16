@@ -162,6 +162,12 @@ func RequireAuth(v *Validator) func(http.Handler) http.Handler {
 	}
 }
 
+// WarmUp pre-fetches the JWKS keys so the first authenticated request
+// doesn't block on a network round-trip to googleapis.com.
+func (v *Validator) WarmUp(ctx context.Context) error {
+	return v.refreshJWKs(ctx)
+}
+
 func (v *Validator) ValidateToken(ctx context.Context, token string) (*JWTClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
