@@ -26,14 +26,17 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Pre-warm JWKS in background so it doesn't block server startup.
 	if authValidator != nil {
-		jwksCtx, jwksCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := authValidator.WarmUp(jwksCtx); err != nil {
-			log.Printf("JWKS pre-warm failed (will retry on first request): %v", err)
-		} else {
-			log.Println("JWKS keys pre-warmed")
-		}
-		jwksCancel()
+		go func() {
+			jwksCtx, jwksCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer jwksCancel()
+			if err := authValidator.WarmUp(jwksCtx); err != nil {
+				log.Printf("JWKS pre-warm failed (will retry on first request): %v", err)
+			} else {
+				log.Println("JWKS keys pre-warmed")
+			}
+		}()
 	}
 
 	projectID := strings.TrimSpace(config.GetEnv("FIREBASE_PROJECT_ID"))
