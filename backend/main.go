@@ -26,6 +26,16 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if authValidator != nil {
+		jwksCtx, jwksCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := authValidator.WarmUp(jwksCtx); err != nil {
+			log.Printf("JWKS pre-warm failed (will retry on first request): %v", err)
+		} else {
+			log.Println("JWKS keys pre-warmed")
+		}
+		jwksCancel()
+	}
+
 	projectID := strings.TrimSpace(config.GetEnv("FIREBASE_PROJECT_ID"))
 	if projectID == "" {
 		log.Fatal("FIREBASE_PROJECT_ID is required for Firestore")
