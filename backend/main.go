@@ -10,6 +10,7 @@ import (
 	"cloud.google.com/go/firestore"
 
 	"backend/auth"
+	"backend/builder"
 	"backend/config"
 	"backend/email"
 	"backend/httputil"
@@ -68,6 +69,7 @@ func main() {
 
 	rh := resume.NewHandler(resumeState, resumeStorage)
 	wh := waitlist.NewHandler(wlStore, mailer)
+	bh := builder.NewHandler()
 	requireAuth := auth.RequireAuth(authValidator)
 	llmLimiter := httputil.NewRateLimiter(1*time.Minute, auth.RequestUserID)
 
@@ -81,6 +83,7 @@ func main() {
 	mux.Handle("/api/generate-application-package",
 		requireAuth(httputil.WithRateLimit(llmLimiter, http.HandlerFunc(rh.GenerateApplicationPackage))))
 	mux.Handle("/api/generate-pdf", requireAuth(http.HandlerFunc(rh.GeneratePDF)))
+	mux.Handle("/api/builder/generate-pdf", requireAuth(http.HandlerFunc(bh.GeneratePDF)))
 	mux.HandleFunc("/api/waitlist/notify-signup", wh.NotifySignupHandler)
 	mux.Handle("/api/waitlist/status", requireAuth(http.HandlerFunc(wh.StatusHandler)))
 	mux.Handle("/api/admin/waitlist", requireAuth(http.HandlerFunc(wh.AdminListHandler)))
