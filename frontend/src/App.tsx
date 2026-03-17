@@ -125,6 +125,21 @@ const readApiError = async (res: Response): Promise<string> => {
   return `request failed (${res.status})`
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+const fetchWithRetry = async (
+  fetchFn: () => Promise<Response>,
+  retries = 2,
+  delayMs = 2000,
+): Promise<Response> => {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetchFn()
+    if (res.status !== 503 && res.status !== 504) return res
+    if (attempt < retries) await sleep(delayMs)
+  }
+  return fetchFn()
+}
+
 const UploadIcon = (props: IconProps) => (
   <Icon viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" {...props}>
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
@@ -317,7 +332,7 @@ function App() {
 
       const backendCheck = async () => {
         try {
-          const res = await apiFetch('/api/waitlist/status')
+          const res = await fetchWithRetry(() => apiFetch('/api/waitlist/status'))
           if (res.ok) {
             const data = await res.json() as { status: string }
             const s = (data.status ?? '').trim() as WaitlistStatus
@@ -352,7 +367,7 @@ function App() {
 
     const checkResumeStatus = async () => {
       try {
-        const res = await apiFetch('/api/resume-status')
+        const res = await fetchWithRetry(() => apiFetch('/api/resume-status'))
         if (!res.ok) return
 
         const data: ResumeStatus = await res.json()
@@ -400,10 +415,12 @@ function App() {
       const formData = new FormData()
       formData.append('resume', file)
 
-      const res = await apiFetch('/api/upload-resume', {
-        method: 'POST',
-        body: formData,
-      })
+      const res = await fetchWithRetry(() =>
+        apiFetch('/api/upload-resume', {
+          method: 'POST',
+          body: formData,
+        })
+      )
 
       if (!res.ok) {
         throw new Error(await readApiError(res))
