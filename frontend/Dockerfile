@@ -26,7 +26,6 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENV PORT=8080
-ENV BACKEND_URL=http://localhost:3001
 
 EXPOSE 8080
 

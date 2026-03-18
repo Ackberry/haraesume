@@ -36,6 +36,7 @@ func (s *Sender) SendWaitlistConfirmation(toEmail string) error {
 <h2 style="font-size:20px;margin:0 0 16px">You're on the waitlist</h2>
 <p style="color:#444;line-height:1.6;margin:0 0 12px">Thanks for signing up for Haraesume. We'll review your request and let you know as soon as your account is ready.</p>
 <p style="color:#444;line-height:1.6;margin:0">In the meantime, have your LaTeX resume handy — you'll be able to start tailoring it the moment you're in.</p>
+<p style="color:#444;line-height:1.6;margin:20px 0 0">If you run into any errors or have ideas, message <a href="mailto:ackberrie@gmail.com" style="color:#111">ackberrie@gmail.com</a>.</p>
 <hr style="border:none;border-top:1px solid #eee;margin:28px 0 16px">
 <p style="color:#999;font-size:13px;margin:0">— Haraesume</p>
 </div>`
@@ -61,13 +62,14 @@ func (s *Sender) SendApprovalEmail(toEmail string) error {
 
 	appURL := strings.TrimSpace(os.Getenv("APP_URL"))
 	if appURL == "" {
-		appURL = "https://haraesume.com"
+		appURL = "https://haraesume.ackberry.dev"
 	}
 
 	html := fmt.Sprintf(`<div style="font-family:-apple-system,system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px">
 <h2 style="font-size:20px;margin:0 0 16px">You've been approved!</h2>
 <p style="color:#444;line-height:1.6;margin:0 0 20px">Your Haraesume account is now active. Sign in to start tailoring your resume for every role you apply to.</p>
 <a href="%s" style="display:inline-block;padding:10px 28px;background:#111;color:#fff;text-decoration:none;border-radius:4px;font-size:14px;font-weight:500">Sign in</a>
+<p style="color:#444;line-height:1.6;margin:20px 0 0">If you run into any errors or have ideas, message <a href="mailto:ackberrie@gmail.com" style="color:#111">ackberrie@gmail.com</a>.</p>
 <hr style="border:none;border-top:1px solid #eee;margin:28px 0 16px">
 <p style="color:#999;font-size:13px;margin:0">— Haraesume</p>
 </div>`, appURL)

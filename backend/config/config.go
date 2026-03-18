@@ -12,7 +12,7 @@ import (
 
 const (
 	AppVersion                 = "0.1.0"
-	ServerAddr                 = "0.0.0.0:3001"
+	DefaultPort                = "3001"
 	OpenRouterBaseURL          = "https://openrouter.ai/api/v1/chat/completions"
 	OpenRouterModel            = "anthropic/claude-sonnet-4"
 	MaxMultipartMemory         = 16 << 20
@@ -111,6 +111,14 @@ func ResolveProjectRootDir() (string, error) {
 		return filepath.Abs(parent)
 	}
 	return filepath.Abs(workingDir)
+}
+
+func ServerAddr() string {
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		port = DefaultPort
+	}
+	return "0.0.0.0:" + port
 }
 
 func GetEnv(key string) string {
