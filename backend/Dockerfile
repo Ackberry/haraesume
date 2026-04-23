@@ -12,6 +12,7 @@ FROM python:3.11-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     texlive-latex-base \
     texlive-latex-extra \
+    texlive-fonts-extra \
     texlive-fonts-recommended \
     texlive-xetex \
     latexmk \
