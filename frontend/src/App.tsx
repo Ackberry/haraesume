@@ -101,11 +101,12 @@ interface ResumePdfApiResponse {
   tex_files_deleted?: boolean
 }
 
-type Step = 'upload' | 'job' | 'optimize' | 'result'
-const STEPS: Step[] = ['upload', 'job', 'optimize', 'result']
+type Step = 'upload' | 'projects' | 'job' | 'optimize' | 'result'
+const STEPS: Step[] = ['upload', 'projects', 'job', 'optimize', 'result']
 
 const STEP_LABELS: Record<Step, string> = {
   upload: 'upload',
+  projects: 'projects',
   job: 'job',
   optimize: 'optimize',
   result: 'result',
@@ -243,6 +244,7 @@ function App() {
   const [hasSavedResume, setHasSavedResume] = useState<boolean>(false)
   const [showRetentionNotice, setShowRetentionNotice] = useState(false)
   const [changesSummary, setChangesSummary] = useState<string[]>([])
+  const [extraProjects, setExtraProjects] = useState<BuilderProject[]>([emptyProject()])
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const currentStepIndex = STEPS.indexOf(step)
@@ -373,7 +375,7 @@ function App() {
         const data: ResumeStatus = await res.json()
         if (data.has_resume) {
           setHasSavedResume(true)
-          setStep('job')
+          setStep('projects')
         }
       } catch {
         // Keep upload as fallback.
@@ -427,7 +429,8 @@ function App() {
       }
 
       setHasSavedResume(true)
-      setStep('job')
+      setExtraProjects([emptyProject()])
+      setStep('projects')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'upload failed')
     } finally {
@@ -464,6 +467,33 @@ function App() {
       openFilePicker()
     }
   }, [openFilePicker])
+
+  const handleProjectsSubmit = async (projectsToSend: BuilderProject[]) => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await apiFetch('/api/additional-projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projects: projectsToSend.filter((p) => p.name.trim()).map((p) => ({
+            name: p.name,
+            tech_stack: p.techStack,
+            bullets: p.bullets.filter((b) => b.trim()),
+            link: p.link,
+          })),
+        }),
+      })
+      if (!res.ok) {
+        throw new Error(await readApiError(res))
+      }
+      setStep('job')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'failed to save projects')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleJobSubmit = async () => {
     if (!jobDescription.trim()) {
@@ -917,6 +947,69 @@ function App() {
                       </Box>
                     </Stack>
                   )}
+                </Stack>
+              )}
+
+              {/* ── Extra Projects Step ──────────────── */}
+              {step === 'projects' && (
+                <Stack spacing={5} w="full" align="center">
+                  <Box textAlign="center">
+                    <Heading size="md" mb={2}>extra projects</Heading>
+                    <Text color="ink.700">add projects not on your resume. the optimizer will swap in the most relevant ones for each job.</Text>
+                  </Box>
+
+                  <Stack spacing={3} w="full">
+                    {extraProjects.map((proj, i) => (
+                      <Stack key={i} spacing={2} p={3} border="1px solid" borderColor="ink.200" w="full">
+                        {extraProjects.length > 1 && (
+                          <Flex justify="flex-end">
+                            <Button size="xs" variant="subtle" color="red.500" onClick={() => setExtraProjects(extraProjects.filter((_, j) => j !== i))}>remove</Button>
+                          </Flex>
+                        )}
+                        <HStack spacing={3} flexWrap="wrap">
+                          <Input flex="1" minW="200px" placeholder="project name" value={proj.name} onChange={(e) => { const copy = [...extraProjects]; copy[i] = { ...proj, name: e.target.value }; setExtraProjects(copy) }} />
+                          <Input flex="1" minW="200px" placeholder="link (optional)" value={proj.link} onChange={(e) => { const copy = [...extraProjects]; copy[i] = { ...proj, link: e.target.value }; setExtraProjects(copy) }} />
+                        </HStack>
+                        <Input placeholder="tech stack (e.g. React, Go, PostgreSQL)" value={proj.techStack} onChange={(e) => { const copy = [...extraProjects]; copy[i] = { ...proj, techStack: e.target.value }; setExtraProjects(copy) }} />
+                        <Stack spacing={1}>
+                          <Text fontSize="xs" color="ink.500">bullet points</Text>
+                          {proj.bullets.map((bullet, bi) => (
+                            <HStack key={bi} spacing={2}>
+                              <Input flex="1" size="sm" placeholder="bullet point" value={bullet} onChange={(e) => {
+                                const copy = [...extraProjects]
+                                const bullets = [...proj.bullets]
+                                bullets[bi] = e.target.value
+                                copy[i] = { ...proj, bullets }
+                                setExtraProjects(copy)
+                              }} />
+                              {proj.bullets.length > 1 && (
+                                <Button size="xs" variant="subtle" color="red.500" onClick={() => {
+                                  const copy = [...extraProjects]
+                                  copy[i] = { ...proj, bullets: proj.bullets.filter((_, j) => j !== bi) }
+                                  setExtraProjects(copy)
+                                }}>x</Button>
+                              )}
+                            </HStack>
+                          ))}
+                          <Button size="xs" variant="subtle" alignSelf="flex-start" onClick={() => {
+                            const copy = [...extraProjects]
+                            copy[i] = { ...proj, bullets: [...proj.bullets, ''] }
+                            setExtraProjects(copy)
+                          }}>+ bullet</Button>
+                        </Stack>
+                      </Stack>
+                    ))}
+                    <Button size="xs" variant="subtle" alignSelf="flex-start" onClick={() => setExtraProjects([...extraProjects, emptyProject()])}>+ add project</Button>
+                  </Stack>
+
+                  <Flex gap={3} wrap="wrap" justify="center">
+                    <Button variant="subtle" onClick={() => void handleProjectsSubmit([])}>
+                      skip
+                    </Button>
+                    <Button onClick={() => void handleProjectsSubmit(extraProjects)} isDisabled={loading} leftIcon={loading ? <Spinner size="sm" /> : undefined}>
+                      {loading ? 'saving' : 'continue'}
+                    </Button>
+                  </Flex>
                 </Stack>
               )}
 
