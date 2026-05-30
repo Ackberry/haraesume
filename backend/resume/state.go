@@ -8,6 +8,7 @@ type UserState struct {
 	baseResume            *string
 	currentOptimized      *string
 	currentJobDescription *string
+	additionalProjects    *string // JSON-encoded []llm.ExtraProject
 }
 
 type State struct {
@@ -37,6 +38,7 @@ func (s *State) SetBaseResume(userID, value string) {
 	v := value
 	state.baseResume = &v
 	state.currentOptimized = nil
+	state.additionalProjects = nil
 }
 
 func (s *State) SetOptimizedResume(userID, value string) {
@@ -90,5 +92,23 @@ func (s *State) GetJobDescription(userID string) (string, bool) {
 		return "", false
 	}
 	return *state.currentJobDescription, true
+}
+
+func (s *State) SetAdditionalProjects(userID, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.getOrCreateLocked(userID)
+	v := value
+	state.additionalProjects = &v
+}
+
+func (s *State) GetAdditionalProjects(userID string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	state, ok := s.users[userID]
+	if !ok || state.additionalProjects == nil {
+		return "", false
+	}
+	return *state.additionalProjects, true
 }
 

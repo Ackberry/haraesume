@@ -121,6 +121,55 @@ func (h *Handler) UploadResume(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) SetAdditionalProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var payload struct {
+		Projects []llm.ExtraProject `json:"projects"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		return
+	}
+
+	for i := range payload.Projects {
+		payload.Projects[i].Name = llm.SanitizeUserInput(payload.Projects[i].Name)
+		payload.Projects[i].TechStack = llm.SanitizeUserInput(payload.Projects[i].TechStack)
+		payload.Projects[i].Link = llm.SanitizeUserInput(payload.Projects[i].Link)
+		for j, b := range payload.Projects[i].Bullets {
+			payload.Projects[i].Bullets[j] = llm.SanitizeUserInput(b)
+		}
+	}
+
+	data, err := json.Marshal(payload.Projects)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "Failed to process projects")
+		return
+	}
+
+	userID := auth.RequestUserID(r)
+	h.state.SetAdditionalProjects(userID, string(data))
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"count":   len(payload.Projects),
+	})
+}
+
+func (h *Handler) loadExtraProjects(userID string) []llm.ExtraProject {
+	projJSON, ok := h.state.GetAdditionalProjects(userID)
+	if !ok || projJSON == "" {
+		return nil
+	}
+	var projects []llm.ExtraProject
+	if err := json.Unmarshal([]byte(projJSON), &projects); err != nil {
+		return nil
+	}
+	return projects
+}
+
 func (h *Handler) SetJobDescription(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -171,7 +220,7 @@ func (h *Handler) OptimizeResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	optimizedLatex, changesSummary, err := llm.OptimizeResume(resume, jobDescription)
+	optimizedLatex, changesSummary, err := llm.OptimizeResume(resume, jobDescription, h.loadExtraProjects(userID))
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("LLM error: %v", err))
 		return
@@ -208,7 +257,7 @@ func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	optimizedLatex, changesSummary, err := llm.OptimizeResume(resume, jobDescription)
+	optimizedLatex, changesSummary, err := llm.OptimizeResume(resume, jobDescription, h.loadExtraProjects(userID))
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Resume generation failed: %v", err))
 		return
