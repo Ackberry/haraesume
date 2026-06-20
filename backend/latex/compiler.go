@@ -37,6 +37,9 @@ func compileToPDFInternal(latexSource string) ([]byte, string, error) {
 	if latexSource == "" {
 		return nil, "", errors.New("no LaTeX source to compile")
 	}
+	if err := ValidateSupportedPackages(latexSource); err != nil {
+		return nil, "", err
+	}
 
 	texPath := filepath.Join(tempDir, "resume.tex")
 	pdfPath := filepath.Join(tempDir, "resume.pdf")

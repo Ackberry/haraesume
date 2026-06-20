@@ -132,6 +132,7 @@ func main() {
 	// Routes that need Firestore (gated by requireReady).
 	mux.Handle("/api/resume-status", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.ResumeStatus })))
 	mux.Handle("/api/upload-resume", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.UploadResume })))
+	mux.Handle("/api/additional-projects", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.SetAdditionalProjects })))
 	mux.Handle("/api/job-description", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.SetJobDescription })))
 	mux.Handle("/api/optimize",
 		requireAuth(httputil.WithRateLimit(llmLimiter, resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.OptimizeResume }))))
