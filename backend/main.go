@@ -134,6 +134,7 @@ func main() {
 	mux.Handle("/api/upload-resume", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.UploadResume })))
 	mux.Handle("/api/additional-projects", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.SetAdditionalProjects })))
 	mux.Handle("/api/job-description", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.SetJobDescription })))
+	mux.Handle("/api/analyze-fit", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.AnalyzeFit })))
 	mux.Handle("/api/optimize",
 		requireAuth(httputil.WithRateLimit(llmLimiter, resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.OptimizeResume }))))
 	mux.Handle("/api/generate-application-package",

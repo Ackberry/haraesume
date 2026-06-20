@@ -3,6 +3,7 @@ package llm
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -82,6 +83,8 @@ Content policy:
 Technical Skills policy:
 - Add at most 5 missing, job-relevant skills/tools/frameworks.
 - Keep the original category structure (Languages/Frameworks/Tools/Concepts).
+- Place any newly added skill at the beginning of its matching category, not the end.
+- Reorder skills within each category by relevance to the job description, with required/must-have skills first.
 - Do not flood the section with every keyword from the job description.
 
 Output format:
@@ -121,6 +124,7 @@ Recommended technical skills to consider (up to 5 total):
 		lockedSections = append(lockedSections, "projects")
 	}
 	optimizedLatex = RestoreLockedSections(resumeLatex, optimizedLatex, lockedSections)
+	optimizedLatex = PrioritizeTechnicalSkills(resumeLatex, optimizedLatex, jobDescription)
 
 	return optimizedLatex, changesSummary, nil
 }
@@ -248,6 +252,231 @@ func RestoreLockedSections(originalLatex, optimizedLatex string, lockedSections 
 	}
 	builder.WriteString(optimizedLatex[prev:])
 	return builder.String()
+}
+
+var technicalSkillLineRegex = regexp.MustCompile(`(?m)(\\textbf\{([^}]+)\}\s*:\s*)(.*?)(\s*\\\\)?$`)
+
+func PrioritizeTechnicalSkills(originalLatex, optimizedLatex, jobDescription string) string {
+	optimizedSections := latex.ParseSections(optimizedLatex)
+	if len(optimizedSections) == 0 {
+		return optimizedLatex
+	}
+
+	originalSkillsByCategory := extractTechnicalSkillsByCategory(originalLatex)
+	jobLower := strings.ToLower(jobDescription)
+
+	var builder strings.Builder
+	prev := 0
+	changed := false
+	for _, section := range optimizedSections {
+		builder.WriteString(optimizedLatex[prev:section.Start])
+		if latex.NormalizeSectionName(section.Title) != "technical skills" {
+			builder.WriteString(section.Content)
+			prev = section.End
+			continue
+		}
+
+		updated := prioritizeTechnicalSkillSection(section.Content, originalSkillsByCategory, jobLower)
+		builder.WriteString(updated)
+		changed = changed || updated != section.Content
+		prev = section.End
+	}
+	builder.WriteString(optimizedLatex[prev:])
+	if !changed {
+		return optimizedLatex
+	}
+	return builder.String()
+}
+
+type technicalSkillItem struct {
+	Text      string
+	Normalize string
+	Score     int
+	WasAdded  bool
+	Index     int
+}
+
+func prioritizeTechnicalSkillSection(sectionContent string, originalSkillsByCategory map[string]map[string]struct{}, jobLower string) string {
+	return technicalSkillLineRegex.ReplaceAllStringFunc(sectionContent, func(line string) string {
+		matches := technicalSkillLineRegex.FindStringSubmatch(line)
+		if len(matches) < 5 {
+			return line
+		}
+
+		prefix := matches[1]
+		category := normalizeSkillCategory(matches[2])
+		rawList := strings.TrimSpace(matches[3])
+		suffix := matches[4]
+		if rawList == "" {
+			return line
+		}
+
+		originalSkills := originalSkillsByCategory[category]
+		items := splitSkillItems(rawList)
+		if len(items) < 2 {
+			return line
+		}
+
+		ranked := make([]technicalSkillItem, 0, len(items))
+		for i, item := range items {
+			normalized := normalizeSkillName(item)
+			_, existed := originalSkills[normalized]
+			ranked = append(ranked, technicalSkillItem{
+				Text:      item,
+				Normalize: normalized,
+				Score:     scoreSkillForJob(item, jobLower),
+				WasAdded:  !existed,
+				Index:     i,
+			})
+		}
+
+		sort.SliceStable(ranked, func(i, j int) bool {
+			if ranked[i].WasAdded != ranked[j].WasAdded {
+				return ranked[i].WasAdded
+			}
+			if ranked[i].Score != ranked[j].Score {
+				return ranked[i].Score > ranked[j].Score
+			}
+			return ranked[i].Index < ranked[j].Index
+		})
+
+		reordered := make([]string, 0, len(ranked))
+		for _, item := range ranked {
+			reordered = append(reordered, item.Text)
+		}
+		return prefix + strings.Join(reordered, ", ") + suffix
+	})
+}
+
+func extractTechnicalSkillsByCategory(latexSource string) map[string]map[string]struct{} {
+	section := latex.GetSectionContent(latexSource, "technical skills")
+	out := map[string]map[string]struct{}{}
+	if section == "" {
+		return out
+	}
+
+	for _, match := range technicalSkillLineRegex.FindAllStringSubmatch(section, -1) {
+		if len(match) < 4 {
+			continue
+		}
+		category := normalizeSkillCategory(match[2])
+		if _, ok := out[category]; !ok {
+			out[category] = map[string]struct{}{}
+		}
+		for _, item := range splitSkillItems(match[3]) {
+			normalized := normalizeSkillName(item)
+			if normalized != "" {
+				out[category][normalized] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+func splitSkillItems(raw string) []string {
+	parts := strings.Split(raw, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		item = strings.TrimSuffix(item, `\\`)
+		item = strings.TrimSpace(item)
+		if item != "" {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func normalizeSkillCategory(category string) string {
+	return strings.ToLower(strings.TrimSpace(strings.ReplaceAll(category, `\&`, "&")))
+}
+
+func normalizeSkillName(skill string) string {
+	cleaned := strings.NewReplacer(
+		`\\`, " ",
+		`\&`, "&",
+		`{`, "",
+		`}`, "",
+	).Replace(skill)
+	cleaned = regexp.MustCompile(`\\[A-Za-z]+[*]?`).ReplaceAllString(cleaned, "")
+	cleaned = strings.ToLower(strings.TrimSpace(latex.SpaceRegex.ReplaceAllString(cleaned, " ")))
+	return cleaned
+}
+
+func scoreSkillForJob(skill, jobLower string) int {
+	normalized := normalizeSkillName(skill)
+	if normalized == "" || jobLower == "" {
+		return 0
+	}
+
+	score := countSkillTermOccurrences(jobLower, normalized) * 6
+	aliases := skillAliases(normalized)
+	for _, alias := range aliases {
+		score += countSkillTermOccurrences(jobLower, alias) * 4
+	}
+
+	for _, line := range latex.SplitInformativeLines(jobLower) {
+		if !containsSkillTerm(line, normalized) && !containsAlias(line, aliases) {
+			continue
+		}
+		if latex.ContainsAny(line, []string{"required", "must", "minimum", "qualification", "responsibilit"}) {
+			score += 4
+		}
+		if latex.ContainsAny(line, []string{"preferred", "nice to have", "plus", "bonus"}) {
+			score += 2
+		}
+	}
+
+	return score
+}
+
+func containsAlias(text string, aliases []string) bool {
+	for _, alias := range aliases {
+		if containsSkillTerm(text, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func countSkillTermOccurrences(text, term string) int {
+	if text == "" || term == "" {
+		return 0
+	}
+	return len(skillTermRegex(term).FindAllStringIndex(text, -1))
+}
+
+func containsSkillTerm(text, term string) bool {
+	if text == "" || term == "" {
+		return false
+	}
+	return skillTermRegex(term).MatchString(text)
+}
+
+func skillTermRegex(term string) *regexp.Regexp {
+	escaped := regexp.QuoteMeta(strings.ToLower(term))
+	return regexp.MustCompile(`(?:^|[^a-z0-9+#])` + escaped + `(?:$|[^a-z0-9+#])`)
+}
+
+func skillAliases(normalized string) []string {
+	aliasesBySkill := map[string][]string{
+		"amazon web services": {"aws"},
+		"aws":                 {"amazon web services"},
+		"ci/cd":               {"continuous integration", "continuous delivery"},
+		"c++":                 {"cpp"},
+		"gcp":                 {"google cloud"},
+		"github actions":      {"gh actions"},
+		"kubernetes":          {"k8s"},
+		"node.js":             {"node", "nodejs"},
+		"next.js":             {"nextjs"},
+		"postgresql":          {"postgres"},
+		"rest apis":           {"rest api", "restful"},
+		"typescript":          {"ts"},
+	}
+	if aliases, ok := aliasesBySkill[normalized]; ok {
+		return aliases
+	}
+	return nil
 }
 
 func formatSkillSuggestions(suggestions []SkillSuggestion) string {

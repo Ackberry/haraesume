@@ -91,6 +91,25 @@ interface OptimizeApiResponse {
   changes_summary: string
 }
 
+interface SkillCoverage {
+  name: string
+  matched: boolean
+  evidence?: string
+}
+
+interface FitAnalysisResponse {
+  overall_match: number
+  required_coverage: number
+  preferred_coverage: number
+  missing_must_have: string[]
+  covered_strengths: string[]
+  required_skills: SkillCoverage[]
+  preferred_skills: SkillCoverage[]
+  ats_warnings: string[]
+  weak_bullets: string[]
+  top_recommendations: string[]
+}
+
 interface ResumePdfApiResponse {
   pdf_base64: string
   filename: string
@@ -101,13 +120,14 @@ interface ResumePdfApiResponse {
   tex_files_deleted?: boolean
 }
 
-type Step = 'upload' | 'projects' | 'job' | 'optimize' | 'result'
-const STEPS: Step[] = ['upload', 'projects', 'job', 'optimize', 'result']
+type Step = 'upload' | 'projects' | 'job' | 'fit' | 'optimize' | 'result'
+const STEPS: Step[] = ['upload', 'projects', 'job', 'fit', 'optimize', 'result']
 
 const STEP_LABELS: Record<Step, string> = {
   upload: 'upload',
   projects: 'projects',
   job: 'job',
+  fit: 'fit',
   optimize: 'optimize',
   result: 'result',
 }
@@ -159,6 +179,13 @@ const FileIcon = (props: IconProps) => (
 const CheckIcon = (props: IconProps) => (
   <Icon viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" {...props}>
     <polyline points="20 6 9 17 4 12" />
+  </Icon>
+)
+
+const XIcon = (props: IconProps) => (
+  <Icon viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" {...props}>
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
   </Icon>
 )
 
@@ -245,6 +272,7 @@ function App() {
   const [showRetentionNotice, setShowRetentionNotice] = useState(false)
   const [changesSummary, setChangesSummary] = useState<string[]>([])
   const [extraProjects, setExtraProjects] = useState<BuilderProject[]>([emptyProject()])
+  const [fitAnalysis, setFitAnalysis] = useState<FitAnalysisResponse | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const currentStepIndex = STEPS.indexOf(step)
@@ -430,6 +458,7 @@ function App() {
 
       setHasSavedResume(true)
       setExtraProjects([emptyProject()])
+      setFitAnalysis(null)
       setStep('projects')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'upload failed')
@@ -495,6 +524,15 @@ function App() {
     }
   }
 
+  const handleAnalyzeFit = async () => {
+    const res = await apiFetch('/api/analyze-fit', { method: 'POST' })
+    if (!res.ok) {
+      throw new Error(await readApiError(res))
+    }
+    const data: FitAnalysisResponse = await res.json()
+    setFitAnalysis(data)
+  }
+
   const handleJobSubmit = async () => {
     if (!jobDescription.trim()) {
       setError('please enter a job description')
@@ -515,9 +553,10 @@ function App() {
         throw new Error(await readApiError(res))
       }
 
-      setStep('optimize')
+      await handleAnalyzeFit()
+      setStep('fit')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'failed to save job description')
+      setError(e instanceof Error ? e.message : 'failed to analyze job fit')
     } finally {
       setLoading(false)
     }
@@ -1032,7 +1071,10 @@ function App() {
                     minH="300px"
                     placeholder="paste the full job description here..."
                     value={jobDescription}
-                    onChange={(e) => setJobDescription(e.target.value)}
+                    onChange={(e) => {
+                      setJobDescription(e.target.value)
+                      setFitAnalysis(null)
+                    }}
                   />
 
                   <Flex gap={3} wrap="wrap" justify="center">
@@ -1041,6 +1083,148 @@ function App() {
                     </Button>
                     <Button onClick={handleJobSubmit} isDisabled={loading} leftIcon={loading ? <Spinner size="sm" /> : undefined}>
                       {loading ? 'saving' : 'continue'}
+                    </Button>
+                  </Flex>
+                </Stack>
+              )}
+
+              {/* ── Fit Analysis Step ───────────────── */}
+              {step === 'fit' && (
+                <Stack spacing={6} w="full" align="center" textAlign="left">
+                  <Box textAlign="center">
+                    <Heading size="md" mb={2}>application fit</Heading>
+                    <Text color="ink.700">review the match before generating a tailored version.</Text>
+                  </Box>
+
+                  {fitAnalysis ? (
+                    <Stack spacing={5} w="full">
+                      <Flex
+                        w="full"
+                        gap={4}
+                        justify="center"
+                        align="stretch"
+                        wrap="wrap"
+                      >
+                        {[
+                          ['overall', fitAnalysis.overall_match],
+                          ['required', fitAnalysis.required_coverage],
+                          ['preferred', fitAnalysis.preferred_coverage],
+                        ].map(([label, value]) => (
+                          <Box
+                            key={label}
+                            flex="1"
+                            minW="150px"
+                            borderTop="1px solid"
+                            borderColor="ink.300"
+                            pt={3}
+                            textAlign="center"
+                          >
+                            <Text fontSize="xs" color="ink.500">{label}</Text>
+                            <Text fontSize="2xl" fontWeight="bold" color="ink.900">{Number(value).toFixed(0)}%</Text>
+                          </Box>
+                        ))}
+                      </Flex>
+
+                      <Flex gap={5} align="flex-start" wrap="wrap">
+                        <Box flex="1" minW={{ base: '100%', md: '300px' }}>
+                          <Text fontWeight="semibold" mb={3} color="ink.800">missing must-haves</Text>
+                          {fitAnalysis.missing_must_have.length > 0 ? (
+                            <List spacing={2} color="ink.700" fontSize="sm">
+                              {fitAnalysis.missing_must_have.map((item) => (
+                                <ListItem key={item}>
+                                  <ListIcon as={XIcon} color="red.500" />
+                                  {item}
+                                </ListItem>
+                              ))}
+                            </List>
+                          ) : (
+                            <Text color="ink.600" fontSize="sm">No required skill gaps detected.</Text>
+                          )}
+                        </Box>
+
+                        <Box flex="1" minW={{ base: '100%', md: '300px' }}>
+                          <Text fontWeight="semibold" mb={3} color="ink.800">covered strengths</Text>
+                          {fitAnalysis.covered_strengths.length > 0 ? (
+                            <List spacing={2} color="ink.700" fontSize="sm">
+                              {fitAnalysis.covered_strengths.map((item) => (
+                                <ListItem key={item}>
+                                  <ListIcon as={CheckIcon} color="ink.600" />
+                                  {item}
+                                </ListItem>
+                              ))}
+                            </List>
+                          ) : (
+                            <Text color="ink.600" fontSize="sm">No strong keyword overlap detected yet.</Text>
+                          )}
+                        </Box>
+                      </Flex>
+
+                      <Box>
+                        <Text fontWeight="semibold" mb={3} color="ink.800">top recommendations</Text>
+                        <List spacing={2} color="ink.700" fontSize="sm">
+                          {fitAnalysis.top_recommendations.map((item, i) => (
+                            <ListItem key={`${item}-${i}`}>
+                              <ListIcon as={CheckIcon} color="ink.600" />
+                              {item}
+                            </ListItem>
+                          ))}
+                        </List>
+                      </Box>
+
+                      {(fitAnalysis.ats_warnings.length > 0 || fitAnalysis.weak_bullets.length > 0) && (
+                        <Flex gap={5} align="flex-start" wrap="wrap">
+                          {fitAnalysis.ats_warnings.length > 0 && (
+                            <Box flex="1" minW={{ base: '100%', md: '300px' }}>
+                              <Text fontWeight="semibold" mb={3} color="ink.800">ats warnings</Text>
+                              <List spacing={2} color="ink.700" fontSize="sm">
+                                {fitAnalysis.ats_warnings.map((item, i) => (
+                                  <ListItem key={`${item}-${i}`}>{item}</ListItem>
+                                ))}
+                              </List>
+                            </Box>
+                          )}
+
+                          {fitAnalysis.weak_bullets.length > 0 && (
+                            <Box flex="1" minW={{ base: '100%', md: '300px' }}>
+                              <Text fontWeight="semibold" mb={3} color="ink.800">weak bullets</Text>
+                              <List spacing={2} color="ink.700" fontSize="sm">
+                                {fitAnalysis.weak_bullets.map((item, i) => (
+                                  <ListItem key={`${item}-${i}`}>{item}</ListItem>
+                                ))}
+                              </List>
+                            </Box>
+                          )}
+                        </Flex>
+                      )}
+                    </Stack>
+                  ) : (
+                    <Stack spacing={3} align="center">
+                      <Spinner size="lg" color="ink.900" thickness="3px" />
+                      <Text color="ink.700">analyzing fit...</Text>
+                    </Stack>
+                  )}
+
+                  <Flex gap={3} wrap="wrap" justify="center">
+                    <Button variant="subtle" onClick={() => setStep('job')}>back</Button>
+                    <Button
+                      variant="subtle"
+                      onClick={async () => {
+                        setLoading(true)
+                        setError('')
+                        try {
+                          await handleAnalyzeFit()
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : 'fit analysis failed')
+                        } finally {
+                          setLoading(false)
+                        }
+                      }}
+                      isDisabled={loading}
+                    >
+                      {loading ? 'refreshing' : 'refresh analysis'}
+                    </Button>
+                    <Button onClick={() => setStep('optimize')}>
+                      continue
                     </Button>
                   </Flex>
                 </Stack>
