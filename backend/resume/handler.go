@@ -13,6 +13,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"backend/analysis"
 	"backend/auth"
 	"backend/config"
 	"backend/httputil"
@@ -231,6 +232,34 @@ func (h *Handler) OptimizeResume(w http.ResponseWriter, r *http.Request) {
 		OptimizedLatex: optimizedLatex,
 		ChangesSummary: changesSummary,
 	})
+}
+
+func (h *Handler) AnalyzeFit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	userID := auth.RequestUserID(r)
+	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
+		return
+	}
+
+	resume, ok := h.state.GetBaseResume(userID)
+	if !ok {
+		httputil.WriteError(w, http.StatusBadRequest, "No base resume found. Please upload a resume first.")
+		return
+	}
+
+	jobDescription, ok := h.state.GetJobDescription(userID)
+	if !ok {
+		httputil.WriteError(w, http.StatusBadRequest, "No job description provided. Please set a job description first.")
+		return
+	}
+
+	report := analysis.AnalyzeResumeFit(resume, jobDescription)
+	httputil.WriteJSON(w, http.StatusOK, report)
 }
 
 func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Request) {
