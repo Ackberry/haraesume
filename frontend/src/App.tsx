@@ -120,8 +120,8 @@ interface ResumePdfApiResponse {
   tex_files_deleted?: boolean
 }
 
-type Step = 'upload' | 'projects' | 'job' | 'fit' | 'optimize' | 'result'
-const STEPS: Step[] = ['upload', 'projects', 'job', 'fit', 'optimize', 'result']
+type Step = 'upload' | 'projects' | 'job' | 'optimize' | 'result'
+const STEPS: Step[] = ['upload', 'projects', 'job', 'optimize', 'result']
 
 const STEP_LABELS: Record<Step, string> = {
   upload: 'upload',
@@ -272,7 +272,6 @@ function App() {
   const [showRetentionNotice, setShowRetentionNotice] = useState(false)
   const [changesSummary, setChangesSummary] = useState<string[]>([])
   const [extraProjects, setExtraProjects] = useState<BuilderProject[]>([emptyProject()])
-  const [fitAnalysis, setFitAnalysis] = useState<FitAnalysisResponse | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const currentStepIndex = STEPS.indexOf(step)
@@ -458,7 +457,6 @@ function App() {
 
       setHasSavedResume(true)
       setExtraProjects([emptyProject()])
-      setFitAnalysis(null)
       setStep('projects')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'upload failed')
@@ -522,15 +520,6 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }
-
-  const handleAnalyzeFit = async () => {
-    const res = await apiFetch('/api/analyze-fit', { method: 'POST' })
-    if (!res.ok) {
-      throw new Error(await readApiError(res))
-    }
-    const data: FitAnalysisResponse = await res.json()
-    setFitAnalysis(data)
   }
 
   const handleJobSubmit = async () => {
