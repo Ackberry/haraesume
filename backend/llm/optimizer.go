@@ -83,6 +83,8 @@ Content policy:
 Technical Skills policy:
 - Add at most 5 missing, job-relevant skills/tools/frameworks.
 - Keep the original category structure (Languages/Frameworks/Tools/Concepts).
+- Place any newly added skill at the beginning of its matching category, not the end.
+- Reorder skills within each category by relevance to the job description, with required/must-have skills first.
 - Do not flood the section with every keyword from the job description.
 
 Output format:
@@ -122,6 +124,7 @@ Recommended technical skills to consider (up to 5 total):
 		lockedSections = append(lockedSections, "projects")
 	}
 	optimizedLatex = RestoreLockedSections(resumeLatex, optimizedLatex, lockedSections)
+	optimizedLatex = PrioritizeTechnicalSkills(resumeLatex, optimizedLatex, jobDescription)
 
 	return optimizedLatex, changesSummary, nil
 }
