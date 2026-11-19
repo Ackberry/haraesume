@@ -204,37 +204,11 @@ Resume upload is `.tex` only. PDF is generated as output via `/api/generate-pdf`
 
 ## LangGraph Resume Match Agents
 
-This repo now includes a dedicated LangChain + LangGraph multi-node agent flow for resume checking and job matching:
-
-- Location: `backend/agents/`
-- Install deps: `pip install -r backend/agents/requirements.txt`
-- Entry point:
-  - `cd backend`
-  - `python -m agents --resume-file ../sample_resume.tex --jd-file ./job_description.txt`
-
-### Agent Tools
-
-- `extract_keywords` - keyword extraction for resume/JD text
-- `ats_lint_resume` - ATS format and completeness checks
-- `parse_job_requirements` - required/preferred skill extraction
-- `compute_match_score` - required/preferred/overall match scores
-- `identify_skill_gaps` - matched vs missing skill detection
-
-### Graph Nodes and Edges
-
-1. `validate` -> checks required inputs
-2. `resume_check` -> ATS lint + resume keywords
-3. `job_analysis` -> JD requirements + keywords
-4. `matching` -> coverage scoring + gap detection
-5. `recommendations` -> actionable improvements
-6. `finalize` -> final report synthesis
-
-Edges:
-- `START -> validate`
-- `validate -> resume_check` (if valid) else `validate -> finalize`
-- `resume_check -> job_analysis -> matching -> recommendations -> finalize -> END`
+The standalone Python CLI analyzes resumes and job descriptions. Its graph, tools, state contract, and CLI commands are documented in the [LangChain and LangGraph agent specification](backend/agents/README.md).
 
 ## Development
+
+See [architecture and the development agent harness](agents.md) for runtime boundaries, repository skills, and verification by area.
 
 ### Backend
 
