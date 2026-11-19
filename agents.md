@@ -1,247 +1,93 @@
-# Haraesume Agentic Architecture: A Systems Report on Hybrid LLM Orchestration and Graph-Based Resume Analysis
+# Haraesume Architecture and Agent Harness
 
-## Abstract
-We present a technical study of the current agent architecture implemented in `haraesume`, a resume optimization system that combines prompt-constrained generation with deterministic analysis. The system is hybrid by design: a Go-based service layer orchestrates production-facing LLM agents for resume rewriting, cover-letter generation, and organization extraction, while a Python LangGraph pipeline executes structured ATS checks, requirement parsing, skill-gap analysis, and recommendation synthesis. We report the implemented state models, tool contracts, routing logic, fallback controls, and reproducibility interfaces. Our findings show that the architecture emphasizes practical robustness through layered constraints, parser-based output validation, and deterministic degradation paths; however, it remains limited by heuristic parsing and prompt-level guarantees rather than formal policy enforcement.
+## Scope
 
-## 1. Introduction
-Recent LLM applications often choose between two paradigms: direct prompt orchestration (fast to build, harder to constrain) and graph/tool-driven execution (more explicit control, additional engineering overhead). In this work, we implemented both paradigms in one repository and used each where it is operationally strongest.
+This guide describes the source as of `89a8baa`, the `main` revision used as the documentation baseline.
 
-Specifically, the production HTTP path uses prompt-defined agents to generate candidate artifacts (resume and cover letter), while a separate analytical path uses LangGraph and explicit tools to compute interpretable diagnostics (ATS warnings, coverage scores, and skill gaps). This report documents the architecture as implemented in code, not as a conceptual target.
+## 1. Runtime boundaries
 
-## 2. Materials and Codebase Evidence
-Our analysis uses direct inspection of the following artifacts:
+| Component | Responsibility | Source |
+| --- | --- | --- |
+| React and Vite frontend | Firebase Google sign-in, waitlist UI, resume upload and tailoring, resume builder, and PDF download | [App](frontend/src/App.tsx), [Firebase setup](frontend/src/firebase.ts) |
+| Go HTTP service | Authenticated resume workflows, Firestore persistence, OpenRouter calls, LaTeX compilation, and waitlist APIs | [Routes and startup](backend/main.go) |
+| Python LangGraph | Standalone CLI for resume and job matching | [LangChain and LangGraph specification](backend/agents/README.md) |
 
-- `/Users/ackberry/Desktop/College/haraesume/backend/main.go`
-- `/Users/ackberry/Desktop/College/haraesume/backend/agents/graph.py`
-- `/Users/ackberry/Desktop/College/haraesume/backend/agents/tools.py`
-- `/Users/ackberry/Desktop/College/haraesume/backend/agents/state.py`
-- `/Users/ackberry/Desktop/College/haraesume/backend/agents/cli.py`
-- `/Users/ackberry/Desktop/College/haraesume/backend/agents/requirements.txt`
-- `/Users/ackberry/Desktop/College/haraesume/.codex/skills/interactive-coding-coach/SKILL.md`
+The browser calls the Go API through the Vite proxy in development and Nginx in the frontend container. The Go route handlers have no dependency on the Python graph. The backend image includes the graph and its Python dependencies alongside the Go binary and TeX Live. [Vite configuration](frontend/vite.config.ts), [Nginx configuration](frontend/nginx.conf.template), [Backend image](backend/Dockerfile)
 
-## 3. System Overview
-We identify three agent strata:
+## 2. Go web workflows
 
-1. **Production LLM orchestration (Go runtime)**
-- Resume Optimizer Agent
-- Cover Letter Agent
-- Company Name Extraction Agent
+### Resume tailoring and export
 
-2. **Analytical graph execution (Python runtime)**
-- LangGraph pipeline with six nodes and five tools
+1. The user uploads a UTF-8 `.tex` resume or reuses their saved base resume, then submits a job description. Both inputs go through length checks and sanitization. [Resume handlers](backend/resume/handler.go)
+2. The web app runs a deterministic Go fit check on the base resume and job description before tailoring. The report covers skill coverage, missing must-have skills, strengths, ATS warnings, weak bullets, and recommendations. [Fit analyzer](backend/analysis/analyzer.go), [App](frontend/src/App.tsx)
+3. `llm.OptimizeResume` ranks candidate technical skills using a curated dictionary and job-description signals. An optional user-supplied project pool lets the model select among original and additional projects. The optimizer wraps the inputs as untrusted data and asks OpenRouter for complete LaTeX followed by a `---CHANGES---` summary. The prompt asks for at most five new technical skills and a one-page result. [Optimizer](backend/llm/optimizer.go), [Input handling](backend/llm/sanitize.go)
+4. The response parser requires LaTeX document boundaries and extracts the summary when available. The optimizer restores matching Experience and Leadership sections from the base resume, restores Projects when the additional pool is empty, and reorders technical skills for job relevance. Restoration depends on recognizable section names in both documents. The five-skill limit and factual accuracy depend on model compliance. [Optimizer](backend/llm/optimizer.go), [LaTeX parser](backend/latex/parser.go)
+5. Export compiles the active resume, preferring the optimized version when present. Company resolution prompts for a JSON object, parses the result permissively, and uses regex heuristics on agent errors. It can return `Unknown Company`. The download API returns base64 PDF data and metadata. [Resume handlers](backend/resume/handler.go), [Company resolution](backend/llm/company.go)
+6. The application-package endpoint runs optimization, resolves the company, then writes a resume PDF under a user- and company-specific directory. It cleans up its intermediate `.tex` and reports PDF generation or save errors in `pdf_warnings`. Cover-letter generation was removed in `51d7733`. [Resume handlers](backend/resume/handler.go), [Routes](backend/main.go)
 
-3. **Development-time assistant skills (Codex layer)**
-- Behavior-guidance skills for authoring/development workflows
-- Not part of backend runtime execution
+### Resume builder and compilation
 
-### 3.1 Architectural Separation
-The Go layer owns user-facing API flows and artifact generation. The Python layer owns structured diagnostics and report synthesis. This separation is deliberate: generation and analysis are decoupled to preserve operational clarity and simplify failure handling.
+The builder validates structured form data, escapes user-entered LaTeX text, renders a server-side template, and returns a PDF. This path uses no LLM. [Builder handler](backend/builder/handler.go), [Builder schema](backend/builder/types.go), [Escaping](backend/builder/escape.go)
 
-## 4. Methods: Production Agent Design (Go)
+Both web flows use `CompileToSinglePagePDF`. The compiler checks declared LaTeX packages against a supported list, then tries available compilers in the order `latexmk`, `tectonic`, `xelatex`, and `pdflatex`. When the page-count probe reports multiple pages, it retries with tighter formatting. It can return a multipage PDF if those retries fail to reach one page. [Compiler](backend/latex/compiler.go), [Supported packages](backend/latex/package_support.go)
 
-### 4.1 Shared Inference Interface
-All Go-side agents call a shared client function, `runLLMWithTemperature(...)`, with:
+### Identity, access, and persistence
 
-- Provider endpoint: `https://openrouter.ai/api/v1/chat/completions`
-- Default model: `anthropic/claude-sonnet-4`
-- Credential: `OPENROUTER_API_KEY`
-- Message structure: system prompt + user prompt + token cap (+ optional temperature)
+- With `AUTH_PROVIDER=firebase`, the API validates Firebase ID tokens and uses the token subject as the user ID. When the provider is unset, the middleware uses a shared anonymous identity. The React app gates its workflows on waitlist approval. Resume and builder routes enforce authentication through the middleware, while the admin handlers check `ADMIN_UIDS`. [Auth middleware](backend/auth/firebase.go), [Routes](backend/main.go), [Waitlist handlers](backend/waitlist/handler.go), [App](frontend/src/App.tsx)
+- The frontend uses Firestore for email waitlist records. The Go status and admin endpoints use a separate JSON-backed store. The public signup notification endpoint uses Resend for confirmation email when configured. [App](frontend/src/App.tsx), [Waitlist store](backend/waitlist/store.go), [Waitlist handlers](backend/waitlist/handler.go)
+- The backend persists base LaTeX in `resumes/<uid>` with an `expire_at` timestamp seven days after upload. The storage layer checks expiry when loading from Firestore. An already-cached base resume is served from memory without rechecking that timestamp. Physical deletion depends on Firestore TTL configuration. [Resume storage](backend/resume/storage.go)
+- The base resume cache, current job description, optimized LaTeX, and additional project pool are process-local. Changing the job description clears the optimized version. Uploading a base resume also resets the additional project pool. PDF artifacts written to disk follow the configured application output path and deployment volume. [Resume state](backend/resume/state.go), [Output path configuration](backend/config/config.go)
+- The server initializes the resume handlers in the background. `GET /health` returns HTTP 200 with `starting` or `healthy`, and Firestore-dependent routes return 503 before the readiness flag is set. The startup code discards the Firestore probe result, so the health status represents application initialization. [Startup and routes](backend/main.go)
 
-This yields a consistent inference substrate across all generation/extraction operations.
+## 3. Agent harness for development
 
-### 4.2 Resume Optimizer Agent
-Implemented function: `optimizeResumeWithLLM(resumeLatex, jobDescription)`.
+The workspace's [senior engineering manager skill](.codex/skills/senior-eng-manager/SKILL.md) guides architecture, feature planning, and code review. The [interactive coding coach skill](.codex/skills/interactive-coding-coach/SKILL.md) guides step-by-step work when the user wants to learn or implement a change together.
 
-#### 4.2.1 Prompt Policy
-We enforce hard constraints in prompt form:
-- LaTeX must remain compilable.
-- Structure must be preserved.
-- Experience/Projects/Leadership claims must not be invented.
-- Changes should focus on Technical Skills.
-- Skill additions are capped at 5.
+### Working in the repo
 
-#### 4.2.2 Pre-LLM Heuristic Conditioning
-Before generation, we score candidate technical skills from a curated dictionary using keyword frequency and requirement emphasis signals. This narrows the model’s search space and reduces prompt drift.
+- Inspect the checked-out revision and working tree before planning. Trace the affected user flow through its normal entry point and check the API, state, and output contracts it relies on.
+- Keep web feature changes in the React and Go path. Follow the [Python agent specification](backend/agents/README.md) for changes to the standalone CLI. Document changes to shared concepts such as fit scoring wherever their behavior changes.
+- For work on prompts or scoring, use synthetic resumes and job descriptions as fixtures. Check deterministic behavior with model credentials removed or with model responses stubbed. Report any behavior that depends on a live provider.
+- Update this guide when a change affects runtime boundaries or architecture decisions. Update the Python specification when graph routing, tools, state, or the CLI contract changes.
 
-#### 4.2.3 Post-LLM Validation and Repair
-Returned content is parsed for full-document boundaries (`\documentclass` to `\end{document}`), then section-locked restoration is applied to preserve original `experience`, `projects`, and `leadership` blocks. This acts as a semantic guardrail independent of model compliance.
+### Verification by area
 
-### 4.3 Cover Letter Agent (Two-Pass)
-Implemented function: `generateCoverLetterWithLLM(resumeLatex, jobDescription)`.
+| Area | Checks |
+| --- | --- |
+| Go API or domain logic | Run `go test ./...` from `backend/`. Exercise the affected handler when changing request or response behavior. |
+| Frontend | Run `npm run lint` and `npm run build` from `frontend/`. Walk through the affected browser flow for user-facing changes. |
+| PDF export | Compile a representative synthetic resume and inspect the generated PDF when changing the template, export, or compiler behavior. |
+| Python CLI | Follow the [local verification commands](backend/agents/README.md#local-verification) for graph or tool changes. |
 
-#### 4.3.1 Generation Procedure
-- Pass 1 (draft, `temperature=0.65`): produce complete LaTeX letter.
-- Pass 2 (refine, `temperature=0.35`): improve precision, style, and robustness.
+Report the checks run and the ones that still need a configured service or local dependency.
 
-#### 4.3.2 Grounding Strategy
-We convert resume LaTeX to plaintext and extract salient lines from both resume and job description. These are inserted as factual context to reduce fabrication and force role-relevant specificity.
+## 4. Runtime interfaces and configuration
 
-#### 4.3.3 Fallback Behavior
-If refinement fails, we return the draft. If neither output contains a complete LaTeX document, the endpoint returns an error.
+| Interface | Routes |
+| --- | --- |
+| Health | `GET /health` |
+| Resume workflow | `GET /api/resume-status`, `POST /api/upload-resume`, `POST /api/additional-projects`, `POST /api/job-description`, `POST /api/analyze-fit`, `POST /api/optimize`, `POST /api/generate-pdf`, `POST /api/generate-application-package` |
+| Builder | `POST /api/builder/generate-pdf` |
+| Waitlist | `GET /api/waitlist/status`, `POST /api/waitlist/notify-signup` |
+| Waitlist admin | `GET /api/admin/waitlist`, `POST /api/admin/waitlist/update` |
 
-### 4.4 Company Extraction Agent
-Implemented function: `extractCompanyNameWithAgent(jobDescription)`.
+The optimization and application-package routes share a per-user rate limiter. [Route registration](backend/main.go), [Rate limiter](backend/httputil/ratelimit.go)
 
-This micro-agent is constrained to output strict JSON: `{"company_name":"..."}`. We parse permissively across format variants, then normalize. If extraction fails, we execute regex heuristics (`Company:`, `join X`, `at X`, `X is ...`) as deterministic fallback.
+| Runtime | Configuration |
+| --- | --- |
+| Frontend | `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, and `VITE_FIREBASE_PROJECT_ID` configure Firebase. |
+| Go identity and storage | `AUTH_PROVIDER=firebase` enables token validation. `FIREBASE_PROJECT_ID` is required for Firestore, which uses Google application credentials. The container entrypoint can load credentials from `GOOGLE_APPLICATION_CREDENTIALS_JSON`. |
+| Go inference | `OPENROUTER_API_KEY` is read when making an LLM call. The endpoint and `anthropic/claude-sonnet-4` model are constants in Go. |
+| Go operations | `PORT` defaults to `3001`. `APPLICATIONS_ROOT_PATH` overrides the PDF artifact root. `ADMIN_UIDS`, `RESEND_API_KEY`, and `RESEND_FROM_EMAIL` configure waitlist administration and email. |
 
-### 4.5 Production Orchestration Endpoint
-`POST /api/generate-application-package` composes all three agents:
+[Frontend configuration](frontend/src/firebase.ts), [Go configuration](backend/config/config.go), [Container entrypoint](backend/entrypoint.sh), [Go inference client](backend/llm/client.go)
 
-1. Optimize resume
-2. Generate cover letter
-3. Extract company name
-4. Write intermediate `.tex` files
-5. Compile PDFs
-6. Return package metadata
-7. Delete intermediate `.tex` files
+## 5. Architecture decisions in Git history
 
-The orchestration captures warnings for partial PDF failures and returns file paths for successful outputs.
-
-## 5. Methods: Graph-Based Analytical Design (Python)
-
-### 5.1 Graph Topology
-In `/Users/ackberry/Desktop/College/haraesume/backend/agents/graph.py`, we define:
-
-- Nodes: `validate`, `resume_check`, `job_analysis`, `matching`, `recommendations`, `finalize`
-- Flow:
-  - `START -> validate`
-  - if invalid input: `validate -> finalize`
-  - else: `validate -> resume_check -> job_analysis -> matching -> recommendations -> finalize -> END`
-
-This topology cleanly isolates validation, extraction, scoring, and reporting phases.
-
-### 5.2 State Contract
-`/Users/ackberry/Desktop/College/haraesume/backend/agents/state.py` defines `ResumeMatchState` with typed fields for inputs, intermediates, and terminal outputs, including:
-
-- Inputs: `resume_text`, `job_description`
-- Diagnostics: `ats_checks`, `jd_requirements`, `match_scores`
-- Alignment outputs: `missing_keywords`, `matched_keywords`, `strengths`
-- Final output: `final_report`
-
-### 5.3 Tooling Layer
-Five tools are implemented in `/Users/ackberry/Desktop/College/haraesume/backend/agents/tools.py`:
-
-1. `extract_keywords`
-- Frequency-ranked keyword extraction with stopword filtering.
-
-2. `ats_lint_resume`
-- Checks word count, bullet density, section headers, and contact fields.
-
-3. `parse_job_requirements`
-- Extracts required/preferred skills using keyword overlap + requirement-language cues.
-- Captures responsibilities and minimum years when detectable.
-
-4. `compute_match_score`
-- Computes required and preferred coverage; combines them via weighted sum:
-- `overall_match = 0.7 * required_coverage + 0.3 * preferred_coverage`
-
-5. `identify_skill_gaps`
-- Returns matched and missing skill sets by set operations.
-
-### 5.4 Recommendation Synthesis Node
-`recommendations_node` performs dual-path synthesis:
-- Deterministic recommendation seed list (always computed)
-- Optional LLM enhancement via `ChatOpenAI` (OpenRouter-compatible)
-- Strict JSON-list parsing with fallback to deterministic recommendations
-
-This ensures recommendation output even without model credentials.
-
-## 6. Runtime Interfaces and Reproducibility
-
-### 6.1 Go API Surface
-Implemented endpoints in `/Users/ackberry/Desktop/College/haraesume/backend/main.go`:
-
-- `GET /health`
-- `GET /api/resume-status`
-- `POST /api/upload-resume`
-- `POST /api/job-description`
-- `POST /api/optimize`
-- `POST /api/cover-letter`
-- `POST /api/generate-application-package`
-- `POST /api/generate-cover-letter-pdf`
-- `POST /api/generate-pdf`
-
-### 6.2 LangGraph CLI Surface
-`/Users/ackberry/Desktop/College/haraesume/backend/agents/cli.py`:
-
-```bash
-cd /Users/ackberry/Desktop/College/haraesume/backend
-python -m agents --resume-file ../sample_resume.tex --jd-file ./job_description.txt
-```
-
-Optional full state:
-
-```bash
-python -m agents --resume-file ../sample_resume.tex --jd-file ./job_description.txt --json
-```
-
-### 6.3 Environment Variables
-Go runtime:
-- Required: `OPENROUTER_API_KEY`
-- Optional: `RESUME_STORE_PATH`, `APPLICATIONS_ROOT_PATH`
-
-Python runtime:
-- Credential: `OPENROUTER_API_KEY` or `OPENAI_API_KEY`
-- Optional overrides: `OPENROUTER_MODEL`, `OPENROUTER_BASE_URL`
-
-## 7. Results: Observed Robustness Properties
-From implemented code paths, we observe the following robustness mechanisms:
-
-1. **Layered fallback logic**
-- Cover-letter pipeline falls back from refined output to draft output.
-- Recommendation node falls back from model output to deterministic heuristics.
-- Company extraction falls back from model JSON extraction to regex heuristics.
-
-2. **Output-shape constraints**
-- Company extraction uses explicit JSON schema constraints.
-- Resume and cover-letter agents require full LaTeX document delimiters.
-
-3. **Post-generation repair controls**
-- Resume section locking restores high-risk sections after generation.
-
-4. **Failure-visible orchestration**
-- Package endpoint returns warnings for partial PDF compilation failures rather than silently failing.
-
-5. **Deterministic early routing**
-- LangGraph `validate` node short-circuits invalid requests to `finalize` with explicit error messaging.
-
-## 8. Discussion
-The architecture demonstrates a pragmatic hybrid model: prompt-driven generation where linguistic flexibility is needed, and graph/tool-based execution where interpretability and repeatability are required. This separation improves maintainability and debuggability, but it introduces semantic duplication risk between Go-side optimization logic and Python-side analytical logic.
-
-A notable strength is the explicit use of parser and restore steps after LLM generation, which is a concrete mechanism beyond prompt-only control. A current weakness is that many constraints are still soft (instructional) rather than hard (schema-enforced with strict validators across all outputs).
-
-## 9. Threats to Validity and Limitations
-
-1. **Prompt-level enforcement is not formal safety**
-- Constraint text does not guarantee semantic compliance under all model behaviors.
-
-2. **Heuristic extraction bias**
-- ATS and requirement parsing use lightweight heuristics and may underperform for atypical resumes/JDs.
-
-3. **Uncertainty not quantified**
-- Match and recommendation outputs expose no confidence intervals or calibration metadata.
-
-4. **Cross-runtime drift risk**
-- Go and Python logic may evolve independently without a shared canonical scoring contract.
-
-## 10. Conclusion
-We implemented and analyzed a dual-runtime agentic system that combines constrained generation with structured analysis. The production path emphasizes artifact generation and packaging, while the LangGraph path emphasizes interpretable diagnostics and recommendation synthesis. The current system is operationally robust for iterative resume tailoring and provides multiple deterministic fallbacks; future work should prioritize stronger structured-output validation and alignment between generation and analysis semantics.
-
-## References
-[1] Go `net/http` package documentation. [https://pkg.go.dev/net/http](https://pkg.go.dev/net/http)
-
-[2] Go `os/exec` package documentation. [https://pkg.go.dev/os/exec](https://pkg.go.dev/os/exec)
-
-[3] Python `argparse` documentation. [https://docs.python.org/3/library/argparse.html](https://docs.python.org/3/library/argparse.html)
-
-[4] Python `typing.TypedDict` documentation. [https://docs.python.org/3/library/typing.html#typing.TypedDict](https://docs.python.org/3/library/typing.html#typing.TypedDict)
-
-[5] LangGraph documentation. [https://langchain-ai.github.io/langgraph/](https://langchain-ai.github.io/langgraph/)
-
-[6] LangChain tools concept documentation. [https://python.langchain.com/docs/concepts/tools/](https://python.langchain.com/docs/concepts/tools/)
-
-[7] LangChain OpenAI chat integration documentation. [https://python.langchain.com/docs/integrations/chat/openai/](https://python.langchain.com/docs/integrations/chat/openai/)
-
-[8] OpenRouter API reference documentation. [https://openrouter.ai/docs/api-reference/overview](https://openrouter.ai/docs/api-reference/overview)
-
-[9] JSON Data Interchange Standard (RFC 8259). [https://www.rfc-editor.org/rfc/rfc8259](https://www.rfc-editor.org/rfc/rfc8259)
+| Decision | Implementation record |
+| --- | --- |
+| Use Firebase for sign-in and Firestore for persistent base resumes. | `1be638a` migrated auth and introduced Firestore. `a322870` moved base-resume storage to Firestore. |
+| Focus the web workflow on resumes and offer a separate template-based builder. | `51d7733` removed cover-letter generation. `07fce92` added the LaTeX resume builder. |
+| Keep resume analysis separate from LLM tailoring in the web flow. | `d3eee1b` adds a deterministic Go analyzer before optimization. The Python LangGraph CLI remains independently runnable. |
+| Allow users to supply project evidence for tailoring. | `25c4f9d` adds a pool of user-entered projects for the optimizer. Its presence changes how the Projects section is handled. |
+| Define supported LaTeX packages for PDF export. | `37f4221` adds package validation and updates TeX Live support in the backend image. |
