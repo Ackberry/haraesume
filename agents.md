@@ -45,6 +45,8 @@ The workspace's [senior engineering manager skill](.codex/skills/senior-eng-mana
 
 ### Working in the repo
 
+- Start every new change on a fresh branch from the intended PR base. Use the current checkout for a small, isolated change. Create a separate worktree on a new branch for larger or parallel work, or when another task has changes in the current checkout.
+- Make focused commits that each describe a meaningful change. Run the relevant checks, push the branch, and open a pull request that summarizes the changes and verification. Keep follow-up changes for the same task on its open PR branch.
 - Inspect the checked-out revision and working tree before planning. Trace the affected user flow through its normal entry point and check the API, state, and output contracts it relies on.
 - Keep web feature changes in the React and Go path. Follow the [Python agent specification](backend/agents/README.md) for changes to the standalone CLI. Document changes to shared concepts such as fit scoring wherever their behavior changes.
 - For work on prompts or scoring, use synthetic resumes and job descriptions as fixtures. Check deterministic behavior with model credentials removed or with model responses stubbed. Report any behavior that depends on a live provider.
