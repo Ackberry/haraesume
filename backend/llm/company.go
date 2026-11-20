@@ -146,23 +146,8 @@ func SanitizeFolderName(name string) string {
 	return cleaned
 }
 
-func SanitizeCompanyForFilename(name string) string {
-	cleaned := NormalizeCompanyName(name)
-	if cleaned == "" || strings.EqualFold(cleaned, "unknown company") {
-		return "Unknown Company"
-	}
-
-	cleaned = invalidPathCharRegex.ReplaceAllString(cleaned, "")
-	cleaned = strings.TrimSpace(latex.SpaceRegex.ReplaceAllString(cleaned, " "))
-	cleaned = strings.Trim(cleaned, ". ")
-	if cleaned == "" {
-		return "Unknown Company"
-	}
-	return cleaned
-}
-
 func BuildResumeBaseFilename(companyName string) string {
-	return fmt.Sprintf("Akbari, Deep[(%s)]", SanitizeCompanyForFilename(companyName))
+	return fmt.Sprintf("Akbari, Deep[(%s)]", SanitizeFolderName(companyName))
 }
 
 func parseCompanyNameAgentOutput(content string) string {

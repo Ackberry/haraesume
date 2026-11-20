@@ -105,9 +105,9 @@ func main() {
 	}
 
 	// Lazy wrapper — rh is nil until the goroutine sets it.
-	resumeHandler := func(fn func(*resume.Handler) http.HandlerFunc) http.Handler {
+	resumeHandler := func(fn func(*resume.Handler, http.ResponseWriter, *http.Request)) http.Handler {
 		return requireReady(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fn(rh).ServeHTTP(w, r)
+			fn(rh, w, r)
 		}))
 	}
 
@@ -130,16 +130,16 @@ func main() {
 	})
 
 	// Routes that need Firestore (gated by requireReady).
-	mux.Handle("/api/resume-status", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.ResumeStatus })))
-	mux.Handle("/api/upload-resume", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.UploadResume })))
-	mux.Handle("/api/additional-projects", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.SetAdditionalProjects })))
-	mux.Handle("/api/job-description", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.SetJobDescription })))
-	mux.Handle("/api/analyze-fit", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.AnalyzeFit })))
+	mux.Handle("/api/resume-status", requireAuth(resumeHandler((*resume.Handler).ResumeStatus)))
+	mux.Handle("/api/upload-resume", requireAuth(resumeHandler((*resume.Handler).UploadResume)))
+	mux.Handle("/api/additional-projects", requireAuth(resumeHandler((*resume.Handler).SetAdditionalProjects)))
+	mux.Handle("/api/job-description", requireAuth(resumeHandler((*resume.Handler).SetJobDescription)))
+	mux.Handle("/api/analyze-fit", requireAuth(resumeHandler((*resume.Handler).AnalyzeFit)))
 	mux.Handle("/api/optimize",
-		requireAuth(httputil.WithRateLimit(llmLimiter, resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.OptimizeResume }))))
+		requireAuth(httputil.WithRateLimit(llmLimiter, resumeHandler((*resume.Handler).OptimizeResume))))
 	mux.Handle("/api/generate-application-package",
-		requireAuth(httputil.WithRateLimit(llmLimiter, resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.GenerateApplicationPackage }))))
-	mux.Handle("/api/generate-pdf", requireAuth(resumeHandler(func(h *resume.Handler) http.HandlerFunc { return h.GeneratePDF })))
+		requireAuth(httputil.WithRateLimit(llmLimiter, resumeHandler((*resume.Handler).GenerateApplicationPackage))))
+	mux.Handle("/api/generate-pdf", requireAuth(resumeHandler((*resume.Handler).GeneratePDF)))
 
 	// Routes that DON'T need Firestore — available immediately.
 	mux.Handle("/api/builder/generate-pdf", requireAuth(http.HandlerFunc(bh.GeneratePDF)))
