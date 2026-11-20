@@ -48,8 +48,7 @@ func (h *Handler) ResumeStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := auth.RequestUserID(r)
-	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
+	if !h.ensureBaseResumeLoaded(w, r, userID) {
 		return
 	}
 
@@ -197,6 +196,41 @@ func (h *Handler) SetJobDescription(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) ensureBaseResumeLoaded(w http.ResponseWriter, r *http.Request, userID string) bool {
+	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
+		return false
+	}
+	return true
+}
+
+func (h *Handler) loadTailoringInputs(w http.ResponseWriter, r *http.Request, userID string) (resume, jobDescription string, ok bool) {
+	if !h.ensureBaseResumeLoaded(w, r, userID) {
+		return "", "", false
+	}
+
+	resume, ok = h.state.GetBaseResume(userID)
+	if !ok {
+		httputil.WriteError(w, http.StatusBadRequest, "No base resume found. Please upload a resume first.")
+		return "", "", false
+	}
+
+	jobDescription, ok = h.state.GetJobDescription(userID)
+	if !ok {
+		httputil.WriteError(w, http.StatusBadRequest, "No job description provided. Please set a job description first.")
+		return "", "", false
+	}
+	return resume, jobDescription, true
+}
+
+func (h *Handler) optimizeAndStore(userID, resume, jobDescription string) (optimizedLatex, changesSummary string, err error) {
+	optimizedLatex, changesSummary, err = llm.OptimizeResume(resume, jobDescription, h.loadExtraProjects(userID))
+	if err == nil {
+		h.state.SetOptimizedResume(userID, optimizedLatex)
+	}
+	return optimizedLatex, changesSummary, err
+}
+
 func (h *Handler) OptimizeResume(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		httputil.WriteError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -204,30 +238,17 @@ func (h *Handler) OptimizeResume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := auth.RequestUserID(r)
-	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
-		return
-	}
-
-	resume, ok := h.state.GetBaseResume(userID)
+	resume, jobDescription, ok := h.loadTailoringInputs(w, r, userID)
 	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "No base resume found. Please upload a resume first.")
 		return
 	}
 
-	jobDescription, ok := h.state.GetJobDescription(userID)
-	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "No job description provided. Please set a job description first.")
-		return
-	}
-
-	optimizedLatex, changesSummary, err := llm.OptimizeResume(resume, jobDescription, h.loadExtraProjects(userID))
+	optimizedLatex, changesSummary, err := h.optimizeAndStore(userID, resume, jobDescription)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("LLM error: %v", err))
 		return
 	}
 
-	h.state.SetOptimizedResume(userID, optimizedLatex)
 	httputil.WriteJSON(w, http.StatusOK, httputil.OptimizeResponse{
 		OptimizedLatex: optimizedLatex,
 		ChangesSummary: changesSummary,
@@ -241,20 +262,8 @@ func (h *Handler) AnalyzeFit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := auth.RequestUserID(r)
-	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
-		return
-	}
-
-	resume, ok := h.state.GetBaseResume(userID)
+	resume, jobDescription, ok := h.loadTailoringInputs(w, r, userID)
 	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "No base resume found. Please upload a resume first.")
-		return
-	}
-
-	jobDescription, ok := h.state.GetJobDescription(userID)
-	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "No job description provided. Please set a job description first.")
 		return
 	}
 
@@ -269,30 +278,16 @@ func (h *Handler) GenerateApplicationPackage(w http.ResponseWriter, r *http.Requ
 	}
 
 	userID := auth.RequestUserID(r)
-	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
-		return
-	}
-
-	resume, ok := h.state.GetBaseResume(userID)
+	resume, jobDescription, ok := h.loadTailoringInputs(w, r, userID)
 	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "No base resume found. Please upload a resume first.")
 		return
 	}
 
-	jobDescription, ok := h.state.GetJobDescription(userID)
-	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "No job description provided. Please set a job description first.")
-		return
-	}
-
-	optimizedLatex, changesSummary, err := llm.OptimizeResume(resume, jobDescription, h.loadExtraProjects(userID))
+	optimizedLatex, changesSummary, err := h.optimizeAndStore(userID, resume, jobDescription)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Resume generation failed: %v", err))
 		return
 	}
-
-	h.state.SetOptimizedResume(userID, optimizedLatex)
 
 	companyName, outputDir, err := prepareCompanyOutputDir(jobDescription, userID)
 	if err != nil {
@@ -351,8 +346,7 @@ func (h *Handler) GeneratePDF(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := auth.RequestUserID(r)
-	if err := h.storage.EnsureBaseResumeLoaded(r.Context(), h.state, userID); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load persisted resume: %v", err))
+	if !h.ensureBaseResumeLoaded(w, r, userID) {
 		return
 	}
 
