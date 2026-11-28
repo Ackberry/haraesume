@@ -211,7 +211,7 @@ On the backend service:
 - Mount a volume at `/data`. Generated PDFs then default to `/data/applications`, and the API waitlist file defaults to `/data/waitlist.json`. Railway disk without that volume does not survive a redeploy.
 - Base resumes stay in Firestore, not on the volume.
 
-`functions/` is a Firebase Cloud Function. When a Firestore `waitlist/{email}` document changes to `approved`, it emails the user through Resend (`RESEND_API_KEY`, `RESEND_FROM_EMAIL`). `APP_URL` defaults to `https://haraesume.com`.
+`functions/` is a Firebase Cloud Function. When a Firestore `waitlist/{email}` document changes to `approved`, it emails the user through Resend (`RESEND_API_KEY`, `RESEND_FROM_EMAIL`). `APP_URL` defaults to `https://haraesume.ackberry.dev`.
 
 ## API
 

@@ -24,7 +24,7 @@ exports.onWaitlistApproval = onDocumentUpdated(
       return;
     }
 
-    const appUrl = process.env.APP_URL || "https://haraesume.com";
+    const appUrl = process.env.APP_URL || "https://haraesume.ackberry.dev";
 
     const html = `<div style="font-family:-apple-system,system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px">
 <h2 style="font-size:20px;margin:0 0 16px">You've been approved!</h2>
